@@ -1,6 +1,6 @@
 Apache License 2.0
 
-Copyright (c) 2026 tibig
+Copyright (c) 2026 TIGames
 
 The v2 engine (`code/`, `demos/`, `ext/`, `hello.c`, `MAKE.bat`, vendored
 binaries in the root) is licensed under the Apache License, Version 2.0.

@@ -74,5 +74,5 @@ létre (`project.json5` + `assets/{models,scenes,scripts,prefabs}/`).
   patent-grant védelmet (a "profi open-source" preferált license).
 - Az **editor** (`tools/editor-cpp/`) **GPL-3.0-or-later** alatt — a forkok
   és származékos művek kötelesek nyitott-forráskódúak maradni. A copyright-
-  tulajdonos (tibig) fenntartja a jogot, hogy más license-szel adja ki
+  tulajdonos (TIGames) fenntartja a jogot, hogy más license-szel adja ki
   (pl. kereskedelmi / closed-source).

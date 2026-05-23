@@ -41,6 +41,9 @@ cook*.csv
 *.opensdf
 *.sdf
 
+# ---- Claude Code runtime state (per-session locks, agent outputs) ---------
+.claude/
+
 # ---- OS junk --------------------------------------------------------------
 .DS_Store
 Thumbs.db

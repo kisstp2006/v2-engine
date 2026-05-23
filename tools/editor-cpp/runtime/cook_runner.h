@@ -1,19 +1,19 @@
 #pragma once
 
-// CookRunner — threaded cook driver (Phase 5a). A motor `cook()` API-ját
-// (`code/sys/sys_cook2.h`) hívja egy background-thread-ben fájl-listára.
-// Két mód:
-//   - In-Place: minden file-ra `cook(absPath)` — a motor `.foo.png` cache-
-//                fájlokat hoz létre (a recipe-mask-okhoz, pl. ffmpeg-audio).
-//   - Build cook.zip: ugyanaz + `zip_append_mem` egy archív-fájlba.
+// CookRunner — threaded cook driver (Phase 5a). Calls the engine's `cook()`
+// API (`code/sys/sys_cook2.h`) in a background thread on a file list.
+// Two modes:
+//   - In-Place: `cook(absPath)` for every file — the engine creates `.foo.png`
+//                cache files (for recipe-masks, e.g. ffmpeg-audio).
+//   - Build cook.zip: same + `zip_append_mem` into an archive file.
 //
 // Threading:
-//   - Egyszerre csak EGY worker futhat (a motor cook() NEM thread-safe:
-//     globális `rules`, `static` lokálok). `running_` atomic őrzi.
-//   - Progress per-asset: a worker `mainQueue.enqueue(...)`-pal főszálba
-//     küldi az event-eket (kEvtCookStarted/Progress/Finished/Cancelled).
-//   - Cancel: `cancel_requested_=true` → a következő ciklus elején break-el
-//     (a futó `cook(path)` befejeződik, mid-file nem szakítható meg).
+//   - Only ONE worker can run at a time (the engine's cook() is NOT
+//     thread-safe: global `rules`, `static` locals). Guarded by `running_` atomic.
+//   - Per-asset progress: the worker sends the events to the main thread via
+//     `mainQueue.enqueue(...)` (kEvtCookStarted/Progress/Finished/Cancelled).
+//   - Cancel: `cancel_requested_=true` → breaks at the start of the next cycle
+//     (the running `cook(path)` finishes, mid-file cannot be interrupted).
 
 #include <atomic>
 #include <string>
@@ -33,18 +33,18 @@ public:
     CookRunner(const CookRunner&)            = delete;
     CookRunner& operator=(const CookRunner&) = delete;
 
-    // Cook in-place: minden absPath-re cook() hívás. A motor a recipe-szerinti
-    // `.foo.png` cache-fájlokat hozza létre. Visszaad true ha indult, false
-    // ha már fut egy másik cook.
+    // Cook in-place: cook() call for every absPath. The engine creates the
+    // recipe-based `.foo.png` cache files. Returns true if started, false
+    // if another cook is already running.
     bool startCookInPlace(std::vector<std::string> absPaths);
 
-    // Cook + cook.zip build. zipPath = output abs path (alapból
-    // `<projectPath>/cook.zip`). A motor induláskor felismeri (`cook_zip`).
+    // Cook + cook.zip build. zipPath = output abs path (defaults to
+    // `<projectPath>/cook.zip`). The engine recognizes it at startup (`cook_zip`).
     bool startBuildZip(std::vector<std::string> absPaths,
                        std::string              zipPath);
 
     void requestCancel() { cancel_requested_.store(true); }
-    void joinIfDone();                  // ha lefutott, join() — release thread
+    void joinIfDone();                  // if done, join() — release thread
 
     bool isRunning()       const { return running_.load(); }
     int  progressCurrent() const { return progress_current_.load(); }

@@ -12,7 +12,7 @@ namespace editor {
 
 class EditorApp;
 
-// Egy aktív audio speaker — a Play-szakaszban él.
+// One active audio speaker — lives during the Play phase.
 struct PlayingSound {
     obj*      sourceNode;   // AudioSource node ref
     audio_t   clip;
@@ -21,13 +21,13 @@ struct PlayingSound {
 };
 
 // Play-mode state-management. M11: snapshot + restore. M13: AudioSource
-// indítás/leállás. M17: Script callback-ek (on_update/on_draw) később.
+// start/stop. M17: Script callbacks (on_update/on_draw) later.
 class PlayMode {
 public:
     enum class State { Edit, Play, Pause };
 
     void start(EditorApp& app);   // snapshot + state=Play + audio + scripts
-    void pause();                 // state=Pause (snapshot megmarad)
+    void pause();                 // state=Pause (snapshot is kept)
     void resume();                // state=Play
     void stop(EditorApp& app);    // restore snapshot + audio + scripts + state=Edit
 
@@ -36,13 +36,13 @@ public:
     bool isPlaying() const { return state_ == State::Play; }
     bool isPaused()  const { return state_ == State::Pause; }
 
-    // A Scene panel render-walk-ja minden frame-ben felüt-frissíti a spatial
-    // speaker-ek pozícióját, és a listener-pos a kamerát kapja.
+    // The Scene panel's render-walk refreshes the position of the spatial
+    // speakers every frame, and the listener-pos receives the camera.
     void updateAudio(EditorApp& app, const float listenerPos[3]);
 
-    // Frame-tick: csak Play state-ben fut. ScriptHost::tickAll(dt) → on_update
-    // minden Script-en + mtime-poll auto-reload. EditorApp::drawFrame elején
-    // hívva (a Menubar/panel-draw előtt).
+    // Frame-tick: only runs in the Play state. ScriptHost::tickAll(dt) →
+    // on_update on every Script + mtime-poll auto-reload. Called at the
+    // start of EditorApp::drawFrame (before the Menubar/panel-draw).
     void frameTick(EditorApp& app, float dt);
 
 private:

@@ -1,4 +1,4 @@
-// STL ELŐSZÖR (motor `obj`/`set`/stb. macro-clash okán).
+// STL FIRST (because of the engine's `obj`/`set`/etc. macro-clash).
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -27,8 +27,8 @@ namespace editor {
 
 namespace {
 
-// Statikus cache: engine.ffi tartalom. Egyszer olvasunk, minden VM ugyanazt
-// kapja (1MB string, ~80ms cdef minden VM-en).
+// Static cache: engine.ffi content. We read it once, every VM gets the same
+// thing (1MB string, ~80ms cdef on every VM).
 const std::string& engineFFI() {
     static std::string content;
     static bool loaded = false;
@@ -37,13 +37,13 @@ const std::string& engineFFI() {
         int len = 0;
         char* raw = file_read("code/game/embed/engine.ffi", &len);
         if (raw && len > 0) {
-            content.assign(raw, (size_t)len);   // embedded \0-eket is megőriz
+            content.assign(raw, (size_t)len);   // preserves embedded \0s as well
         }
     }
     return content;
 }
 
-// Traceback-wrapper pcall (game_script_lua2.h:46-58 mintára).
+// Traceback-wrapper pcall (modeled after game_script_lua2.h:46-58).
 int luaTraceback(lua_State* L) {
     if (!lua_isstring(L, 1)) {
         if (lua_isnoneornil(L, 1) || !luaL_callmeta(L, 1, "__tostring")
@@ -92,7 +92,7 @@ bool ScriptHost::installPrintRedirect(lua_State* L) {
     lua_pushlightuserdata(L, this);
     lua_pushcclosure(L, &ScriptHost::luaPrint, 1);
     lua_setglobal(L, "print");
-    // io.write = print (egysoros override; nem mindenre, de leggyakoribb).
+    // io.write = print (single-line override; not for everything, but most common).
     luaL_dostring(L, "io.write = print");
     return true;
 }
@@ -106,17 +106,16 @@ bool ScriptHost::bindEngineFFI(lua_State* L) {
         lua_pop(L, 1);
         return false;
     }
-    // 2) ffi.cdef(strippelt engine.ffi tartalom)
+    // 2) ffi.cdef(stripped engine.ffi content)
     const std::string& ffi = engineFFI();
     if (ffi.empty()) {
         app_.bus().emit("log",
             "[Script] engine.ffi cache empty (file_read failed?)");
         return false;
     }
-    // Windows-makró típusok pre-prelude. A motor engine.ffi tartalmaz Windows
-    // network struct-okat (sockaddr_in6_old, INTERFACE_INFO) amik a
-    // <windows.h> typedef-jeire hivatkoznak — LuaJIT-nek ezeket előre kell
-    // ismernie.
+    // Windows-macro types pre-prelude. The engine's engine.ffi contains
+    // Windows network structs (sockaddr_in6_old, INTERFACE_INFO) that
+    // reference <windows.h> typedefs — LuaJIT needs to know these in advance.
     static const char* WIN_PRELUDE =
         "typedef short SHORT;\n"
         "typedef unsigned short USHORT;\n"
@@ -134,12 +133,12 @@ bool ScriptHost::bindEngineFFI(lua_State* L) {
         "typedef void* PVOID;\n"
         "typedef struct in6_addr_t { unsigned char Byte[16]; } IN6_ADDR;\n";
 
-    // Editor-saját API (a tools/editor-cpp/ ad ki). A motor engine.ffi NEM
-    // tartalmazza, mert ezek a mi helper-eink. A LuaJIT FFI ezeket a process-
-    // szimbólumokból resolválja (editor-cpp.exe).
-    // A `vec3` az engine.ffi-ben union (motor); `obj` opaque typedef. Ezért
-    // typedef-szerű hivatkozást használunk (NEM `struct vec3*`), különben a
-    // LuaJIT "attempt to redefine 'vec3'" hibát ad.
+    // Editor-specific API (exposed by tools/editor-cpp/). The engine's
+    // engine.ffi does NOT contain these because they're our helpers. The
+    // LuaJIT FFI resolves these from the process symbols (editor-cpp.exe).
+    // `vec3` is a union in engine.ffi (engine); `obj` is an opaque typedef.
+    // That's why we use typedef-style references (NOT `struct vec3*`),
+    // otherwise LuaJIT gives an "attempt to redefine 'vec3'" error.
     static const char* EDITOR_PRELUDE =
         "/* editor helpers (tools/editor-cpp/) */\n"
         "vec3* editor_obj_pos_addr           (obj* o);\n"
@@ -176,26 +175,28 @@ bool ScriptHost::bindEngineFFI(lua_State* L) {
         "int          editor_script_enabled         (const obj* o);\n"
         "void         editor_script_set_enabled     (obj* o, int v);\n";
 
-    // "API " token strip (a luaj_bind mintájára).
+    // "API " token strip (modeled after luaj_bind).
     std::string clean(WIN_PRELUDE);
     clean += ffi;
-    // EDITOR_PRELUDE-ot KÜLÖN cdef-hívásban dolgozzuk fel, hogy egy engine.ffi
-    // szintaxishiba ne nyelje el a saját deklarációinkat.
+    // We process EDITOR_PRELUDE in a SEPARATE cdef call, so that an engine.ffi
+    // syntax error doesn't swallow our own declarations.
     for (size_t pos = 0; (pos = clean.find("API ", pos)) != std::string::npos;) {
         clean[pos]='/'; clean[pos+1]='*'; clean[pos+2]='*'; clean[pos+3]='/';
         pos += 4;
     }
-    // A motor engine.ffi 10679+ sora Windows network inline-okat (sockaddr_*,
-    // IN6_IS_ADDR_*) tartalmaz, amik LuaJIT cdef-fel nem kompatibilisek és
-    // egyébként irrelevánsak a script-API-hoz. Levágjuk a fájl-vég felé.
+    // Line 10679+ of the engine's engine.ffi contains Windows network inlines
+    // (sockaddr_*, IN6_IS_ADDR_*) that are not compatible with LuaJIT cdef
+    // and are anyway irrelevant to the script API. We cut them off near the
+    // end of the file.
     size_t cut = clean.find("struct sockaddr_in6_old");
     if (cut != std::string::npos) {
         clean.resize(cut);
         clean += "\n/* truncated at Windows network section */\n";
     }
-    // 1) ffi.cdef(engine.ffi) — a motor luaj_init mintájára: ha hibát talál,
-    // a parser abortolódik, de az addig feldolgozott deklarációk megmaradnak
-    // (a demók is így működnek). Hibát csak logoljuk, nem áll meg.
+    // 1) ffi.cdef(engine.ffi) — modeled after the engine's luaj_init: if it
+    // finds an error, the parser aborts, but the declarations processed up
+    // to that point are retained (the demos work the same way). We only log
+    // errors, we don't stop.
     lua_getglobal(L, "ffi");
     lua_getfield(L, -1, "cdef");
     lua_pushlstring(L, clean.c_str(), clean.size());
@@ -208,15 +209,15 @@ bool ScriptHost::bindEngineFFI(lua_State* L) {
     }
     lua_pop(L, 1);   // pop ffi
     if (rc != 0) {
-        // CSAK info-log — a motor engine.ffi-jében normális hogy Windows
-        // network szakaszon megáll. A demók (hello.lua) is így mennek.
+        // ONLY info-log — it's normal in the engine's engine.ffi to stop
+        // at the Windows network section. The demos (hello.lua) work this way too.
         app_.bus().emit("log",
             std::string("[Script] engine.ffi cdef stopped at: ") + errMsg);
     }
 
-    // 2) Editor-saját helper-ek KÜLÖN cdef-hívásban — mert ha az engine.ffi
-    // abortolódott, az ezután fűzött deklarációk elvesznének. Külön hívás =
-    // fresh parser, saját deklarációink garantáltan bekerülnek.
+    // 2) Editor-specific helpers in a SEPARATE cdef call — because if
+    // engine.ffi aborted, declarations appended after it would be lost.
+    // Separate call = fresh parser, our own declarations are guaranteed to land.
     lua_getglobal(L, "ffi");
     lua_getfield(L, -1, "cdef");
     lua_pushstring(L, EDITOR_PRELUDE);
@@ -241,8 +242,8 @@ bool ScriptHost::loadScript(obj* scriptNode) {
     const char* relPath = editor_script_path(scriptNode);
     if (!relPath || !*relPath) return false;
 
-    // Phase 4a — abs-resolve. A VM source_path-ja abs (a hot-reload
-    // mtime-poll abs-on dolgozik).
+    // Phase 4a — abs-resolve. The VM's source_path is abs (the hot-reload
+    // mtime-poll works on abs).
     std::string absPath = asset_path::toAbsolute(relPath, app_.projectPath());
     const char* path = absPath.c_str();
     if (!is_file(path)) {
@@ -251,7 +252,7 @@ bool ScriptHost::loadScript(obj* scriptNode) {
         return false;
     }
 
-    // Eldobjuk a régi VM-et, ha volt.
+    // Discard the old VM, if there was one.
     unloadScript(scriptNode);
 
     auto vm = std::make_unique<ScriptVM>();
@@ -264,7 +265,7 @@ bool ScriptHost::loadScript(obj* scriptNode) {
         return false;
     }
 
-    // print/error redirect a Console-ra
+    // print/error redirect to the Console
     installPrintRedirect(vm->L);
 
     // engine.ffi cdef + C namespace
@@ -273,9 +274,9 @@ bool ScriptHost::loadScript(obj* scriptNode) {
         return false;
     }
 
-    // Pre-load `node` helper modul (script_node_api.h) — nil-safe shortcut-ok
-    // a motor editor_obj_* / obj_* API-i köré. Csendben skip-elünk ha hiba
-    // (a script attól még futhat a tiszta `C.*` API-val).
+    // Pre-load `node` helper module (script_node_api.h) — nil-safe shortcuts
+    // around the engine's editor_obj_* / obj_* APIs. We silently skip if
+    // there's an error (the script can still run with the pure `C.*` API).
     if (luaL_loadstring(vm->L, kNodeApiLua) == 0) {
         if (pcallWithTraceback(vm->L, 0, 0) != 0) {
             const char* err = lua_tostring(vm->L, -1);
@@ -288,12 +289,12 @@ bool ScriptHost::loadScript(obj* scriptNode) {
         lua_pop(vm->L, 1);
     }
 
-    // self = (struct obj*)scriptNode (lightuserdata, a script ffi.cast-tal
-    // alakítja struct obj*-pointerré).
+    // self = (struct obj*)scriptNode (lightuserdata, the script casts it to
+    // a struct obj* pointer using ffi.cast).
     lua_pushlightuserdata(vm->L, scriptNode);
     lua_setglobal(vm->L, "self");
 
-    // chunk load + futtatás (definiálja a globális on_init/on_update/etc.-t)
+    // chunk load + run (defines the global on_init/on_update/etc.)
     int rc = luaL_loadfile(vm->L, path);
     if (rc != 0) {
         const char* err = lua_tostring(vm->L, -1);
@@ -315,7 +316,7 @@ bool ScriptHost::loadScript(obj* scriptNode) {
 
     vm->load_ok = true;
     void** slot = editor_script_vm_handle_addr(scriptNode);
-    if (slot) *slot = vm->L;     // opaque marker hogy "él"
+    if (slot) *slot = vm->L;     // opaque marker that "it's alive"
     vms_[scriptNode] = std::move(vm);
     app_.bus().emit("log", std::string("[Script] loaded: ") + path);
     return true;
@@ -338,7 +339,7 @@ bool ScriptHost::callFn(obj* scriptNode, const char* fnName, float dt) {
     lua_getglobal(L, fnName);
     if (!lua_isfunction(L, -1)) {
         lua_pop(L, 1);
-        return true;    // nincs ilyen callback — OK
+        return true;    // no such callback — OK
     }
 
     int narg = 0;
@@ -395,7 +396,7 @@ void ScriptHost::startAll() {
 }
 
 void ScriptHost::stopAll() {
-    // sorrend: 1) on_quit, 2) lua_close minden VM-en (a unloadAll erre is).
+    // order: 1) on_quit, 2) lua_close on every VM (unloadAll does this too).
     std::vector<obj*> nodes;
     nodes.reserve(vms_.size());
     for (auto& kv : vms_) nodes.push_back(kv.first);

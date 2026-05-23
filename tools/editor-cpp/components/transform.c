@@ -1,7 +1,7 @@
-// Transform — a legalapvetőbb komponens: position + rotation + scale.
-// A motor reflection rendszerébe regisztrálva STRUCT() / OBJTYPEDEF()-fel.
-// MSVC C-módban (cl /Tc) fordul; a STRUCT() compound-literal-ja miatt
-// nem migrálható C++-ba.
+// Transform — the most fundamental component: position + rotation + scale.
+// Registered into the engine reflection system with STRUCT() / OBJTYPEDEF().
+// Compiles in MSVC C-mode (cl /Tc); the compound-literal in STRUCT() means
+// it can't be migrated to C++.
 
 #include "engine.h"
 #include "components_api.h"
@@ -27,7 +27,6 @@ obj* editor_obj_new_transform(obj* parent, const char* name) {
     return (obj*)t;
 }
 
-/* A Transform-on a `editor_obj_is_transform` is generálódik (egyébként
-   ezt eddig nem deklaráltuk explicit — most macro-konzisztencia kedvéért
-   bekerül). */
+/* `editor_obj_is_transform` is also generated for Transform (we hadn't
+   declared it explicitly before — now it's included for macro consistency). */
 EDITOR_COMPONENT_BASE(Transform, transform)

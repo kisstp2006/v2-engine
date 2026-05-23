@@ -1,4 +1,4 @@
-// STL ELŐSZÖR.
+// STL FIRST.
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -137,9 +137,9 @@ void GamePanel::renderWithCamera(obj* cameraNode, int w, int h, EditorApp& app) 
     collectLights(app.scene().root(), lights);
     walkAndRenderMeshes(app.scene().root(), app, cam, lights);
 
-    // Script on_draw — itt az FBO és kamera már bekötve, így a Lua `C.ddraw_*`
-    // / `C.model_render` ide rajzol. A ddraw_flush kell az aktuális buffer
-    // FBO-ra renderéséhez.
+    // Script on_draw — at this point the FBO and camera are already bound, so the Lua
+    // `C.ddraw_*` / `C.model_render` draws here. The ddraw_flush is needed
+    // to render the current buffer to the FBO.
     if (app.play().isPlaying()) {
         app.scriptHost().drawAll();
         ddraw_flush();
@@ -169,7 +169,7 @@ void GamePanel::draw(EditorApp& app) {
 
         ImVec2 sz = ImGui::GetContentRegionAvail();
         float lineH = ImGui::GetTextLineHeightWithSpacing();
-        // Függőleges centrálás (kb. 2 sornyi szöveg).
+        // Vertical centering (approx 2 lines of text).
         ImGui::Dummy(ImVec2(0, (sz.y - 2 * lineH) * 0.5f));
         centerText("No active Camera in scene.");
         centerText("(GameObject \xE2\x86\x92 Camera \xE2\x86\x92 Camera)");

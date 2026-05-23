@@ -7,7 +7,7 @@ namespace editor {
 class EditorApp;
 
 // Abstract base class for editor panels.
-// Sub-classes implement `draw(app)`, ami a panel ImGui-tartalmát rajzolja.
+// Sub-classes implement `draw(app)`, which draws the panel's ImGui content.
 class Panel {
 public:
     Panel(std::string id, std::string title)

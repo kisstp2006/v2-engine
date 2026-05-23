@@ -16,8 +16,8 @@
 
 namespace editor {
 
-// Game viewport panel. M14: az aktív CameraRef-en át renderel; ha nincs
-// `is_active=true` CameraRef, "No Camera" placeholder.
+// Game viewport panel. M14: renders through the active CameraRef; if there is no
+// CameraRef with `is_active=true`, shows a "No Camera" placeholder.
 class GamePanel : public Panel {
 public:
     GamePanel() : Panel("game", "Game") {}

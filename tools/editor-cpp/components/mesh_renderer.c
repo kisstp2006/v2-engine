@@ -1,7 +1,7 @@
-// MeshRenderer — IQM modell render-komponens.
-// Saját pos/rot/scale-t hordoz (Unity-szerű separation később, M16-ban).
-// A tint mező típusa C-ben `unsigned`, de a STRUCT-ban "rgba" string-szel
-// jelöljük — az `ui_obj` ezt color4-picker-ként rajzolja (obj.h:41).
+// MeshRenderer — IQM model render-component.
+// Carries its own pos/rot/scale (transform-component split later, in M16).
+// The tint field is C `unsigned`, but in STRUCT we tag it with the "rgba"
+// string — `ui_obj` draws it as a color4-picker (obj.h:41).
 
 #include "engine.h"
 #include "components_api.h"
@@ -35,7 +35,7 @@ obj* editor_obj_new_mesh_renderer(obj* parent, const char* name,
     m->scale.y = 1.0f;
     m->scale.z = 1.0f;
     m->cast_shadows = 1;
-    m->tint = 0xFFFFFFFFu;  /* fehér */
+    m->tint = 0xFFFFFFFFu;  /* white */
     return (obj*)m;
 }
 

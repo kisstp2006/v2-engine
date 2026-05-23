@@ -1,4 +1,4 @@
-// STL ELŐSZÖR.
+// STL FIRST.
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -31,16 +31,16 @@ inline vec3 mkv3(float x, float y, float z) {
     vec3 v; v.x = x; v.y = y; v.z = z; return v;
 }
 
-// 2D-barát grid az XY síkon (Z=0). Minor + major rács + tengelyek.
-// camX/Y a viewport középe, halfW/H a látható félméret world-unitban.
+// 2D-friendly grid on the XY plane (Z=0). Minor + major grid + axes.
+// camX/Y is the viewport center, halfW/H is the visible half-size in world units.
 void drawGrid2D(float camX, float camY, float halfW, float halfH) {
-    // Adaptív step: a fov nagysága szerint 10/100/1000 stb. Nagyobb kockák.
-    float scale = halfH * 2.0f;            // viewport-magasság világban
+    // Adaptive step: 10/100/1000 etc. depending on fov size. Larger cells.
+    float scale = halfH * 2.0f;            // viewport-height in world
     int   step  = 10;
-    while (scale / step > 12.0f) step *= 10;   // max ~12 major kocka egy nézetben
+    while (scale / step > 12.0f) step *= 10;   // max ~12 major cells in one view
     while (scale / step < 2.0f)  step /= 10;
     if (step < 1) step = 1;
-    int subStep = step / 5;                    // 5 sub-divízió majoronként
+    int subStep = step / 5;                    // 5 sub-divisions per major
     if (subStep < 1) subStep = 1;
 
     float l = camX - halfW, r = camX + halfW;
@@ -51,7 +51,7 @@ void drawGrid2D(float camX, float camY, float halfW, float halfH) {
     int bSnap = (int)floorf(b / subStep) * subStep;
     int tSnap = (int)ceilf (t / subStep) * subStep;
 
-    // Minor (sub) lines — sötét szürke
+    // Minor (sub) lines — dark gray
     ddraw_color(rgba(60, 60, 70, 255));
     for (int x = lSnap; x <= rSnap; x += subStep) {
         if (x % step == 0) continue;
@@ -62,7 +62,7 @@ void drawGrid2D(float camX, float camY, float halfW, float halfH) {
         ddraw_line(mkv3(l, (float)y, 0), mkv3(r, (float)y, 0));
     }
 
-    // Major lines — világosabb szürke
+    // Major lines — lighter gray
     ddraw_color(rgba(110, 110, 125, 255));
     for (int x = lSnap; x <= rSnap; x += step) {
         if (x == 0) continue;
@@ -73,7 +73,7 @@ void drawGrid2D(float camX, float camY, float halfW, float halfH) {
         ddraw_line(mkv3(l, (float)y, 0), mkv3(r, (float)y, 0));
     }
 
-    // Tengelyek (origó-vonalak) — X piros, Y zöld
+    // Axes (origin lines) — X red, Y green
     ddraw_color(rgba(220, 60, 60, 255));
     ddraw_line(mkv3(l, 0, 0), mkv3(r, 0, 0));
     ddraw_color(rgba(60, 200, 80, 255));
@@ -83,9 +83,9 @@ void drawGrid2D(float camX, float camY, float halfW, float halfH) {
 
 Scene2DPanel::Scene2DPanel() : Panel("scene2d", "Scene 2D") {
     cam_ = camera();
-    // 2D editor-nézet: ortho + kamera a +Z-en, lefelé nézve a XY síkra.
-    // Default `camera()` isometric (pitch=35°, position=(10,10,10)) — ez a
-    // top-down nézethez nem jó, ezért explicit lookat-tel állítjuk be.
+    // 2D editor-view: ortho + camera at +Z, looking down at the XY plane.
+    // Default `camera()` is isometric (pitch=35, position=(10,10,10)) — that
+    // is not good for the top-down view, so we set it up with an explicit lookat.
     cam_.orthographic = true;
     cam_.fov          = 200.0f;
     cam_.position     = mkv3(0.0f, 0.0f, 10.0f);
@@ -148,9 +148,9 @@ void Scene2DPanel::renderSpriteNode(obj* node, EditorApp& app) {
     unsigned tint = 0xFFFFFFFFu;
     editor_sprite_renderer_get_xform(node, pos, &rot, scale, &tint);
 
-    // SPRITE_PROJECTED → a kamera mátrix-szal vetít (zoom/pan hat).
-    // SPRITE_CENTERED  → a sprite pivot a középpontján van.
-    // scale.y negálva  → Y-flip (a motor sprite Y-le-mutat, az ortho Y-fel).
+    // SPRITE_PROJECTED → projects with the camera matrix (zoom/pan affects).
+    // SPRITE_CENTERED  → the sprite pivot is at its center.
+    // scale.y negated  → Y-flip (the motor sprite Y points down, ortho Y up).
     float sheet[3]     = {0, 0, 0};
     float offset[2]    = {0, 0};
     float drawScale[2] = {scale[0], -scale[1]};
@@ -184,7 +184,7 @@ void Scene2DPanel::renderTilemapNode(obj* node, EditorApp& app) {
 
     auto it = tilemapCache_.find(path);
     if (it == tilemapCache_.end()) {
-        // `tiled()` a TMX-tartalmat várja, NEM a path-ot — előbb file_read.
+        // `tiled()` expects the TMX content, NOT the path — file_read first.
         char* content = file_read(path.c_str(), 0);
         if (!content || !*content) {
             failedPaths_.insert(path);
@@ -228,9 +228,9 @@ void Scene2DPanel::walkAndRender(obj* node, EditorApp& app) {
 
 void Scene2DPanel::renderScene(int w, int h, bool inputAllowed, EditorApp& app) {
     if (inputAllowed) {
-        // Pan — MMB drag, fov-arányos sebességgel (1 pixel mouse = 1 unit a
-        // viewport méretéhez normalizálva). A lookat-target is együtt pan-el,
-        // hogy a lookdir mindig (0, 0, -1) maradjon (top-down view).
+        // Pan — MMB drag, at fov-proportional speed (1 pixel mouse = 1 unit
+        // normalized to viewport size). The lookat-target pans together,
+        // so the lookdir always remains (0, 0, -1) (top-down view).
         if (input(MOUSE_M) && h > 0) {
             float panSpeed = (2.0f * cam_.fov) / (float)h;
             cam_.position.x -= input_diff(MOUSE_X) * panSpeed;
@@ -238,7 +238,7 @@ void Scene2DPanel::renderScene(int w, int h, bool inputAllowed, EditorApp& app) 
             camera_lookat(&cam_,
                           mkv3(cam_.position.x, cam_.position.y, 0.0f));
         }
-        // Zoom — scroll wheel, a fov mezőt változtatja (ortho-vetület size).
+        // Zoom — scroll wheel, changes the fov field (ortho-projection size).
         float wheel = input_diff(MOUSE_W);
         if (wheel != 0.0f) {
             cam_.fov *= (1.0f - wheel * 0.1f);
@@ -254,12 +254,12 @@ void Scene2DPanel::renderScene(int w, int h, bool inputAllowed, EditorApp& app) 
 
     camera_enable(&cam_);
 
-    // 2D-barát grid (XY sík, fov-adaptív, tengelyekkel).
+    // 2D-friendly grid (XY plane, fov-adaptive, with axes).
     float aspect = (h > 0) ? (float)w / (float)h : 1.0f;
     drawGrid2D(cam_.position.x, cam_.position.y, cam_.fov * aspect, cam_.fov);
     ddraw_flush();
 
-    // Spatial audio listener — 2D-ben a Scene2D-kamera pozícióját adjuk.
+    // Spatial audio listener — in 2D, we pass the Scene2D-camera position.
     float listenerPos[3] = { cam_.position.x, cam_.position.y, cam_.position.z };
     app.play().updateAudio(app, listenerPos);
 
@@ -300,7 +300,7 @@ void Scene2DPanel::draw(EditorApp& app) {
                      ImVec2((float)w, (float)h),
                      ImVec2(0, 1), ImVec2(1, 0));
 
-        // Drop target — 2D-vel kompatibilis assetek (.png/.jpg/.bmp/.tga → Sprite,
+        // Drop target — assets compatible with 2D (.png/.jpg/.bmp/.tga → Sprite,
         // .tmx → Tilemap).
         if (ImGui::BeginDragDropTarget()) {
             if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("ASSET_PATH")) {
@@ -326,9 +326,9 @@ void Scene2DPanel::draw(EditorApp& app) {
             ImGui::EndDragDropTarget();
         }
 
-        // 2D gizmo — CSAK 2D komponensekre (Sprite, TilemapRef).
-        // T/R/S mind támogatott, de korlátozottan: rotate csak Z-tengelyen,
-        // scale csak X-Y. Z-pos (depth) NEM mozog.
+        // 2D gizmo — ONLY for 2D components (Sprite, TilemapRef).
+        // T/R/S all supported, but restricted: rotate only on Z-axis,
+        // scale only X-Y. Z-pos (depth) does NOT move.
         obj* sel = app.selection().primary();
         vec3* posPtr   = (sel && editor_obj_is_2d_component(sel))
                          ? editor_obj_pos_addr(sel) : nullptr;
@@ -352,13 +352,13 @@ void Scene2DPanel::draw(EditorApp& app) {
                            scalePtr ? scalePtr->z : 1 };
             ImGuizmo_RecomposeMatrixFromComponents(t, r, s, matrix);
 
-            // 2D-szelektív op-maszkok: translate csak X|Y, rotate csak Z,
-            // scale csak X|Y.
+            // 2D-selective op-masks: translate only X|Y, rotate only Z,
+            // scale only X|Y.
             int globalOp = app.gizmoOp();
             IMGUIZMO_OPERATION op;
-            if (globalOp == 120) {        // ROTATE → csak Z
+            if (globalOp == 120) {        // ROTATE → only Z
                 op = (IMGUIZMO_OPERATION)IMGUIZMO_ROTATE_Z;
-            } else if (globalOp == 896) { // SCALE → csak X|Y
+            } else if (globalOp == 896) { // SCALE → only X|Y
                 op = (IMGUIZMO_OPERATION)(IMGUIZMO_SCALE_X | IMGUIZMO_SCALE_Y);
             } else {                      // TRANSLATE (default) → X|Y
                 op = (IMGUIZMO_OPERATION)

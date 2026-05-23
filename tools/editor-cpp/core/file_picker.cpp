@@ -1,4 +1,4 @@
-// STL ELŐSZÖR.
+// STL FIRST.
 #include <string>
 
 #include <windows.h>

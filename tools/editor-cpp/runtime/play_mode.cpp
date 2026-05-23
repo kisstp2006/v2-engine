@@ -1,4 +1,4 @@
-// STL ELŐSZÖR.
+// STL FIRST.
 #include <string>
 
 #include "engine.h"
@@ -68,8 +68,8 @@ void PlayMode::collectAndStartAudio(EditorApp& app, obj* node) {
 
 void PlayMode::stopAllAudio() {
     for (auto& s : playing_) {
-        // speaker_stop deklarált a motor-headerben, de implementálatlan.
-        // A speaker_destroy belül speaker_unbind + alDeleteSources → leáll.
+        // speaker_stop is declared in the engine header but not implemented.
+        // speaker_destroy calls speaker_unbind + alDeleteSources internally → stops.
         speaker_destroy(&s.spk);
         audio_destroy(&s.clip);
     }
@@ -91,7 +91,7 @@ void PlayMode::updateAudio(EditorApp& app, const float listenerPos[3]) {
 
 void PlayMode::start(EditorApp& app) {
     if (state_ == State::Play) return;
-    // Snapshot a teljes scene-tree-ről (reflection-vezérelten).
+    // Snapshot of the entire scene-tree (reflection-driven).
     snapshot_ = SceneIO::saveTree(app.scene().root());
     state_ = State::Play;
     collectAndStartAudio(app, app.scene().root());
@@ -116,11 +116,11 @@ void PlayMode::resume() {
 
 void PlayMode::stop(EditorApp& app) {
     if (state_ == State::Edit) return;
-    // SORREND szigorú: 1) on_quit + lua_close MIELŐTT a scene-tree-t eldobjuk
-    // (különben dangling obj* a ScriptHost map-jében). 2) audio-stop. 3) restore.
+    // STRICT ORDER: 1) on_quit + lua_close BEFORE we drop the scene-tree
+    // (otherwise dangling obj* in the ScriptHost map). 2) audio-stop. 3) restore.
     app.scriptHost().stopAll();
     stopAllAudio();
-    // Restore a snapshot-ból. A jelenlegi scene-tree-t eldobjuk.
+    // Restore from the snapshot. Drop the current scene-tree.
     if (!snapshot_.empty()) {
         obj* newRoot = SceneIO::loadTree(snapshot_);
         if (newRoot) {

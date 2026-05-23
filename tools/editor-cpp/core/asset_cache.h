@@ -8,17 +8,17 @@
 
 namespace editor {
 
-// Közös helper a panel-cache-ekhez. Mtime-poll + failedPaths timeout:
+// Common helper for panel-caches. Mtime-poll + failedPaths timeout:
 //
 //   - `mtimeNs(path)` — std::filesystem::last_write_time → uint64_t ns.
-//   - `shouldRetryFailed(path)` — true ha a path failedPaths-ban volt, de
-//     a timeout lejárt (alapból 2 másodperc). Use-case: a felhasználó a
-//     lemezen javítja a hibás asset-et — az editor magától újra-próbálja.
+//   - `shouldRetryFailed(path)` — true if path was in failedPaths but the
+//     timeout has expired (2 seconds by default). Use-case: the user
+//     fixes the broken asset on disk — the editor retries on its own.
 //
-// A panel-cache (model_t / texture_t / tiled_t) egyszerűbben használja:
+// The panel-cache (model_t / texture_t / tiled_t) uses it more simply:
 //
-//   AssetMtimes mtimes;       // path → utolsó látott mtime
-//   FailedPathSet failed;     // path → mikor adta fel
+//   AssetMtimes mtimes;       // path → last seen mtime
+//   FailedPathSet failed;     // path → when it gave up
 //   if (failed.shouldRetry(path)) failed.erase(path);
 //   uint64_t now_mtime = mtimeNs(path);
 //   if (mtimes[path] != now_mtime) { cache.erase(path); mtimes[path] = now_mtime; }
@@ -39,20 +39,20 @@ inline double nowSeconds() {
 
 class FailedPathSet {
 public:
-    // Timeout (másodperc) — alapból 2.0s után újra-próba.
+    // Timeout (seconds) — retry after 2.0s by default.
     double retry_after = 2.0;
 
     void insert(const std::string& path) { entries_[path] = nowSeconds(); }
     void erase(const std::string& path) { entries_.erase(path); }
 
-    // true ha bent van ÉS még friss (NEM kell újra próbálkozni).
+    // true if inside AND still fresh (NO retry needed).
     bool isFresh(const std::string& path) const {
         auto it = entries_.find(path);
         if (it == entries_.end()) return false;
         return (nowSeconds() - it->second) < retry_after;
     }
 
-    // true ha érdemes újra-próbálkozni (vagy nem volt benn, vagy lejárt).
+    // true if worth retrying (either wasn't in, or expired).
     bool shouldRetry(const std::string& path) const {
         return !isFresh(path);
     }

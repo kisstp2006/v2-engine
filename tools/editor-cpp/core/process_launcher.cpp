@@ -1,4 +1,4 @@
-// STL ELŐSZÖR.
+// STL FIRST.
 #include <string>
 #include <vector>
 
@@ -12,10 +12,10 @@ bool launchEditorWithProject(const std::string& exe,
                              const std::string& projectPath) {
     if (exe.empty()) return false;
 
-    // CreateProcess command-line: az első token hagyományosan az exe név,
-    // és az API a teljes string-et átadja a child-nek (CommandLineToArgv
-    // bontja). Idézőjelezünk space-es path-ok miatt. Üres projectPath esetén
-    // a flag elmarad → picker módban indul.
+    // CreateProcess command-line: the first token is traditionally the exe
+    // name, and the API passes the whole string to the child (CommandLineToArgv
+    // splits it). We quote because of space-containing paths. With empty
+    // projectPath the flag is omitted → starts in picker mode.
     std::string cmdLine;
     cmdLine.reserve(exe.size() + projectPath.size() + 32);
     cmdLine += '"';
@@ -27,7 +27,7 @@ bool launchEditorWithProject(const std::string& exe,
         cmdLine += '"';
     }
 
-    // CreateProcessA mutable buffer-t vár (lpCommandLine nem const).
+    // CreateProcessA expects a mutable buffer (lpCommandLine is not const).
     std::vector<char> buf(cmdLine.begin(), cmdLine.end());
     buf.push_back('\0');
 
@@ -36,7 +36,7 @@ bool launchEditorWithProject(const std::string& exe,
     PROCESS_INFORMATION pi{};
 
     BOOL ok = ::CreateProcessA(
-        exe.c_str(),              // lpApplicationName — teljes exe path
+        exe.c_str(),              // lpApplicationName — full exe path
         buf.data(),               // lpCommandLine — mutable
         nullptr, nullptr,
         FALSE, 0, nullptr, nullptr,

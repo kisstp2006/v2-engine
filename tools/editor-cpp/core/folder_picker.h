@@ -4,7 +4,7 @@
 
 namespace editor {
 
-// Modális natív mappa-választó. Üres string-et ad vissza ha Cancel.
+// Modal native folder picker. Returns empty string if Cancel.
 // Windows: IFileOpenDialog + FOS_PICKFOLDERS.
 std::string pickFolder(const char* title);
 

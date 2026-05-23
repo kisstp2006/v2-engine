@@ -1,14 +1,14 @@
 #pragma once
 
-// AssetValidator (Phase 5c). A scene-fában rekurzív reflection-traverse-szel
-// minden `[asset:*]` hint-tel ellátott `char*` mezőt ellenőriz:
-//   - fájl-létezés (`is_file`)
-//   - kiterjesztés vs. hint-asset-type (pl. `[asset:model]` mező `.png` →
+// AssetValidator (Phase 5c). Recursive reflection-traverse over the scene
+// tree, checking every `char*` field marked with `[asset:*]` hint:
+//   - file existence (`is_file`)
+//   - extension vs. hint-asset-type (e.g. `[asset:model]` field `.png` →
 //     warning)
-//   - projekt-boundary (projekt-en kívüli abs-path → warning, portability-
+//   - project-boundary (abs-path outside the project → warning, portability
 //     impact)
-// Eredmény: `std::vector<AssetIssue>` — a hívó (Tools menü vagy pre-cook
-// gate) dönti, hogy Console-ba ír, modal-ban mutat, vagy blokkolja a cook-ot.
+// Result: `std::vector<AssetIssue>` — the caller (Tools menu or pre-cook
+// gate) decides whether to write to Console, show in a modal, or block the cook.
 
 #include <string>
 #include <vector>
@@ -27,17 +27,17 @@ enum class AssetIssueLevel { Info, Warning, Error };
 struct AssetIssue {
     AssetIssueLevel  level    = AssetIssueLevel::Info;
     obj*             node     = nullptr;
-    std::string      nodeName;       // pl. "Player" — obj_name(node)
-    std::string      typeName;       // pl. "MeshRenderer" — obj_type(node)
-    std::string      fieldName;      // pl. "model_path"
-    std::string      path;            // a tárolt érték (rel vagy abs)
-    std::string      reason;          // pl. "file not found: ..."
+    std::string      nodeName;       // e.g. "Player" — obj_name(node)
+    std::string      typeName;       // e.g. "MeshRenderer" — obj_type(node)
+    std::string      fieldName;      // e.g. "model_path"
+    std::string      path;            // the stored value (rel or abs)
+    std::string      reason;          // e.g. "file not found: ..."
 };
 
 class AssetValidator {
 public:
-    // Teljes scene-traverse az `app.scene().root()`-tól. `app.projectPath()`
-    // alapján resolve-eli az abszolút utakat.
+    // Full scene-traverse from `app.scene().root()`. Resolves absolute paths
+    // based on `app.projectPath()`.
     static std::vector<AssetIssue> validate(EditorApp& app);
 
     static int countErrors  (const std::vector<AssetIssue>& issues);

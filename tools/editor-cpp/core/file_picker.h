@@ -4,9 +4,9 @@
 
 namespace editor {
 
-// Win32 natív file picker. Üres string ha Cancel.
-// `save=true` → Save As dialog, egyébként Open dialog.
-// `extension` pl. "json5" — alapértelmezett kiterjesztés mentésnél.
+// Win32 native file picker. Empty string if Cancel.
+// `save=true` → Save As dialog, otherwise Open dialog.
+// `extension` e.g. "json5" — default extension when saving.
 std::string pickFile(const char* title, const char* extension, bool save);
 
 }  // namespace editor

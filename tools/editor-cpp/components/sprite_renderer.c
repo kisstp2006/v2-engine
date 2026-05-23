@@ -1,5 +1,5 @@
-// SpriteRenderer — 2D sprite render-komponens. Texture-t betölti, és a
-// Scene 2D panel render-walk-ja sprite_sheet-tel rajzolja.
+// SpriteRenderer — 2D sprite render-component. Loads the texture, and the
+// Scene 2D panel render-walk draws it with sprite_sheet.
 
 #include "engine.h"
 #include "components_api.h"
@@ -53,7 +53,7 @@ void editor_sprite_renderer_get_xform(const obj* o,
         out_pos[1] = s->pos.y;
         out_pos[2] = s->pos.z;
     }
-    if (out_rot_deg) *out_rot_deg = s->rot.z;   // 2D: csak Z-tengely
+    if (out_rot_deg) *out_rot_deg = s->rot.z;   // 2D: Z-axis only
     if (out_scale) {
         out_scale[0] = s->scale.x;
         out_scale[1] = s->scale.y;

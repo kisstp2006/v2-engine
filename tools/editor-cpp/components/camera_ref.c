@@ -1,6 +1,6 @@
-// CameraRef — kamera-komponens. A Game panel render-walk-ja az `is_active=true`
-// CameraRef-et használja a render-kameraként. Egy scene-ben egyidejűleg
-// csak egy aktív CameraRef ajánlott (a Game panel az elsőt találja).
+// CameraRef — camera-component. The Game panel render-walk uses the
+// `is_active=true` CameraRef as the render-camera. Only one active CameraRef
+// per scene is recommended (the Game panel picks the first one).
 
 #include "engine.h"
 #include "components_api.h"
@@ -9,11 +9,11 @@
 typedef struct CameraRef {
     OBJ
     COMPONENT_POS
-    vec3   dir;          // forward irány (0,0,-1 default)
+    vec3   dir;          // forward direction (default 0,0,-1)
     float  fov;          // deg
     float  near_clip;
     float  far_clip;
-    int    is_active;    // 0/1 (motor p2s nem tud bool-t)
+    int    is_active;    // 0/1 (engine p2s has no bool)
 } CameraRef;
 
 OBJTYPEDEF(CameraRef, 69);
@@ -30,19 +30,19 @@ AUTORUN {
 obj* editor_obj_new_camera_ref(obj* parent, const char* name) {
     CameraRef* c = obj_new_name(CameraRef, name ? name : "Camera");
     if (parent) obj_attach(parent, c);
-    c->pos.x = 0; c->pos.y = 2; c->pos.z = 5;     // alapból kicsit hátul-felül
-    c->dir.x = 0; c->dir.y = 0; c->dir.z = -1;    // előre néz
+    c->pos.x = 0; c->pos.y = 2; c->pos.z = 5;     // slightly back-and-up by default
+    c->dir.x = 0; c->dir.y = 0; c->dir.z = -1;    // looks forward
     c->fov = 60.0f;
     c->near_clip = 0.1f;
     c->far_clip = 1000.0f;
-    c->is_active = 1;        // alapból aktív (első CameraRef = MainCamera)
+    c->is_active = 1;        // active by default (first CameraRef = MainCamera)
     return (obj*)c;
 }
 
 EDITOR_COMPONENT_POS_ONLY(CameraRef, camera_ref)
 
-// Direction-mező közvetlen accessor (FPS-script-hez): a Lua a `dir.x/y/z`-t
-// frame-enként frissítheti yaw/pitch-ből.
+// Direct accessor for the direction field (for FPS-scripts): Lua can update
+// `dir.x/y/z` every frame based on yaw/pitch.
 API vec3* editor_camera_ref_dir_addr(obj* o) {
     if (!editor_obj_is_camera_ref(o)) return NULL;
     return &((CameraRef*)o)->dir;

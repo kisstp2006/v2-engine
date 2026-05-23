@@ -1,11 +1,11 @@
 #pragma once
 
-// Lua "node" modul — pre-loaded minden Script-VM-be a ScriptHost::loadScript-ben.
-// Egy ergonomikus wrapper a motor FFI editor_obj_* / editor_obj_is_* / obj_*
-// függvényei köré. Mindenhol nil-safe (üres node-ra nem dob exception-t).
+// Lua "node" module — pre-loaded into every Script-VM in ScriptHost::loadScript.
+// An ergonomic wrapper around the engine's FFI editor_obj_* / editor_obj_is_* /
+// obj_* functions. Everywhere nil-safe (doesn't throw exceptions on an empty node).
 //
-// Lua-ból elérhető példák:
-//   local pos = node.pos(self)         -- vec3* (vagy nil)
+// Examples accessible from Lua:
+//   local pos = node.pos(self)         -- vec3* (or nil)
 //   local p   = node.parent(self)
 //   local nm  = node.name(p)           -- Lua string
 //   for child in node.children(p) do
@@ -15,16 +15,16 @@
 
 namespace editor {
 
-// Megj.: a `local _C = C; local _ffi = require("ffi")` előbb tárolja, hogy
-// a szkript-író felülírhassa a `C` globalt (pl. mock-hoz) anélkül hogy a
-// node-modult is megrontaná.
+// Note: the `local _C = C; local _ffi = require("ffi")` stores them first,
+// so that the script author can override the `C` global (e.g. for mocking)
+// without also breaking the node module.
 constexpr const char* kNodeApiLua = R"LUA(
 local _C       = C
 local _ffi     = require("ffi")
 local _string  = _ffi.string
 
--- ---- Math konstansok (Lua-globalok minden scriptben elérhetők) ----------
--- A Lua-standard `math.rad()` / `math.deg()` is használható ugyanezekkel:
+-- ---- Math constants (Lua-globals accessible in every script) ----------
+-- The Lua-standard `math.rad()` / `math.deg()` can also be used with these:
 --   math.rad(yaw) == yaw * deg2rad
 --   math.deg(r)   == r   * rad2deg
 deg2rad = math.pi / 180.0
@@ -32,7 +32,7 @@ rad2deg = 180.0 / math.pi
 
 node = {}
 
--- ---- Transform-mezők (vec3* vagy nil) ----------------------------------
+-- ---- Transform fields (vec3* or nil) ----------------------------------
 function node.pos(o)
     if not o then return nil end
     local p = _C.editor_obj_pos_addr(o)
@@ -54,7 +54,7 @@ function node.scale(o)
     return p
 end
 
--- ---- Hierarchia ---------------------------------------------------------
+-- ---- Hierarchy ---------------------------------------------------------
 function node.parent(o)
     if not o then return nil end
     local p = _C.obj_parent(o)
@@ -81,7 +81,7 @@ function node.child_at(o, i)
     return c
 end
 
--- Iterátor Lua for-loop-ban:  for child in node.children(parent) do end
+-- Iterator in a Lua for-loop:  for child in node.children(parent) do end
 function node.children(o)
     local n = node.child_count(o)
     local i = 0
@@ -93,7 +93,7 @@ function node.children(o)
     end
 end
 
--- ---- Identitás (Lua-string) --------------------------------------------
+-- ---- Identity (Lua-string) --------------------------------------------
 function node.name(o)
     if not o then return nil end
     local n = _C.obj_name(o)
@@ -108,7 +108,7 @@ function node.type(o)
     return _string(t)
 end
 
--- ---- Type-check shortcutok ---------------------------------------------
+-- ---- Type-check shortcuts ---------------------------------------------
 local function _check(fn) return function(o)
     if not o then return false end
     return fn(o) ~= 0
@@ -122,7 +122,7 @@ node.is_camera  = _check(_C.editor_obj_is_camera_ref)
 node.is_audio   = _check(_C.editor_obj_is_audio_source)
 node.is_script  = _check(_C.editor_obj_is_script)
 
--- ---- Asset-path shortcutok (Lua-string, vagy nil) -----------------------
+-- ---- Asset-path shortcuts (Lua-string, or nil) -----------------------
 local function _path(fn) return function(o)
     if not o then return nil end
     local p = fn(o)
@@ -136,7 +136,7 @@ node.tilemap_path = _path(_C.editor_tilemap_ref_path)
 node.audio_path   = _path(_C.editor_audio_source_path)
 node.script_path  = _path(_C.editor_script_path)
 
--- ---- Camera-specifikus (dir vec3*) -------------------------------------
+-- ---- Camera-specific (dir vec3*) -------------------------------------
 function node.camera_dir(o)
     if not o then return nil end
     local d = _C.editor_camera_ref_dir_addr(o)

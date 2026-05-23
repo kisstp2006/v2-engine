@@ -1,4 +1,4 @@
-// STL ELŐSZÖR.
+// STL FIRST.
 #include <string>
 
 #include "engine.h"
@@ -15,7 +15,7 @@ void ToolbarPanel::draw(EditorApp& app) {
     if (ImGui::Begin(title_.c_str(), &visible)) {
         PlayMode& pm = app.play();
 
-        // Bal oldalon: gizmo mode-választó (T/R/S, Unity-paritás W/E/R kulcs).
+        // On the left: gizmo mode selector (T/R/S, W/E/R key).
         int& op = app.gizmoOp();
         if (ImGui::Selectable("T", op == 7, 0, ImVec2(28, 0)))    op = 7;
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Translate (W)");
@@ -27,7 +27,7 @@ void ToolbarPanel::draw(EditorApp& app) {
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scale (R)");
         ImGui::SameLine();
 
-        // Centrált 3-gomb csoport, Unity-stílusú Play/Pause/Stop.
+        // Centered 3-button group: Play / Pause / Stop.
         const float groupW = 96.0f * 3 + 8.0f * 2;
         float availW = ImGui::GetContentRegionAvail().x;
         if (availW > groupW) {
@@ -35,7 +35,7 @@ void ToolbarPanel::draw(EditorApp& app) {
                                  + (availW - groupW) * 0.5f);
         }
 
-        // Play (aktív ha Edit; "Resume" ha Pause)
+        // Play (active if Edit; "Resume" if Pause)
         const char* playLabel = pm.isPaused() ? "Resume" : "Play";
         const bool playDisabled = pm.isPlaying();
         ImGui::BeginDisabled(playDisabled);
@@ -61,7 +61,7 @@ void ToolbarPanel::draw(EditorApp& app) {
         }
         ImGui::EndDisabled();
 
-        // State-indikátor jobbra.
+        // State-indicator on the right.
         ImGui::SameLine();
         const char* st = pm.isEditing() ? "EDIT"
                        : pm.isPlaying() ? "PLAYING"

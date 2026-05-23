@@ -1,5 +1,5 @@
-// STL + ide_helper ELŐSZÖR (a motor `ifdef_*` macrói megrontják a
-// `<filesystem>`-et a stdlib-headerekben — tiszta-STL előbb kell).
+// STL + ide_helper FIRST (the engine's `ifdef_*` macros corrupt
+// `<filesystem>` in the stdlib headers — pure-STL must come first).
 #include <chrono>
 #include <ctime>
 #include <cstdio>
@@ -66,7 +66,7 @@ std::string humanTime(const fs::file_time_type& ft) {
 
 void revealInExplorer(const std::string& absPath) {
 #ifdef _WIN32
-    // /select,"<path>" → megnyitja az Explorer-t és kijelöli a fájlt.
+    // /select,"<path>" → opens Explorer and selects the file.
     std::string args = "/select,\"" + absPath + "\"";
     ::ShellExecuteA(nullptr, "open", "explorer.exe",
                     args.c_str(), nullptr, SW_SHOWNORMAL);
@@ -85,7 +85,7 @@ void drawAssetPreview(EditorApp& app, const std::string& absPath) {
 
     std::string rel = asset_path::toProjectRelative(absPath, app.projectPath());
 
-    // Header: type label (FileTypeRegistry alapján).
+    // Header: type label (based on FileTypeRegistry).
     const FileTypeHandler* h = FileTypeRegistry::instance().handlerFor(absPath);
     const std::string typeLabel = h ? h->label : std::string("File");
 
@@ -123,7 +123,7 @@ void drawAssetPreview(EditorApp& app, const std::string& absPath) {
     ImGui::Separator();
     ImGui::Spacing();
 
-    // ---- Action gombok -----------------------------------------------------
+    // ---- Action buttons -----------------------------------------------------
     const bool hasSpawn = (h && h->action);
     if (!hasSpawn) ImGui::BeginDisabled();
     if (ImGui::Button("Spawn into scene")) {

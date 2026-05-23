@@ -1,4 +1,4 @@
-// STL ELŐSZÖR.
+// STL FIRST.
 #include <cstring>
 #include <string>
 #include <vector>
@@ -30,9 +30,9 @@ void escapeJson5(const std::string& in, std::string& out) {
     }
 }
 
-// A motor `3rd_json5.h` parser-je a string-tartalmat as-is veszi (nem
-// unescape-eli a `\\n`-t newline-ra, sem a `\\\\`-t backslashre). Saját
-// unescape kell hogy az `obj_make` helyesen kapja vissza a body string-et.
+// The engine's `3rd_json5.h` parser takes the string content as-is (it
+// doesn't unescape `\\n` to newline, nor `\\\\` to backslash). Our own
+// unescape is needed so that `obj_make` correctly gets back the body string.
 std::string unescapeJson5(const char* s) {
     std::string out;
     if (!s) return out;
@@ -54,9 +54,9 @@ std::string unescapeJson5(const char* s) {
     return out;
 }
 
-// Phase 4b — node-szintű auto-migration. Minden `char*` mezőre, ha
-// `[asset:*]` hint van + a tárolt érték abs path + projekt-en belül van
-// → relatívra konvertál. Visszaadja a migrált mezők számát.
+// Phase 4b — node-level auto-migration. For every `char*` field, if there's
+// an `[asset:*]` hint + the stored value is an abs path + within the project
+// → converts it to relative. Returns the number of migrated fields.
 int migrateNodePaths(obj* node, const std::string& projectRoot) {
     if (!node || projectRoot.empty()) return 0;
     const char* type = obj_type(node);
@@ -72,7 +72,7 @@ int migrateNodePaths(obj* node, const std::string& projectRoot) {
         if (!mt || strcmp(mt, "char*") != 0) continue;
 
         HintInfo h = parseHint(R->info);
-        if (h.assetType.empty()) continue;   // csak [asset:*]-okat migráljuk
+        if (h.assetType.empty()) continue;   // only migrate [asset:*]
 
         char** field = (char**)((char*)node + R->sz);
         char*  val   = field ? *field : nullptr;
@@ -94,9 +94,10 @@ void collectNodes(obj* node, int parentIdx,
                   std::vector<std::tuple<int, std::string, std::string>>& out) {
     if (!node) return;
     const char* nm = obj_name(node);
-    // INI formátum (`[Type]\nfield.name=value\n...`) — a motor `obj_make`
-    // ezt jól parsolja (typename a `[]` között). A `obj_savejson` viszont
-    // a típusnevet a `{` ELÉ teszi, és az `obj_make` parser azt nem találja.
+    // INI format (`[Type]\nfield.name=value\n...`) — the engine's `obj_make`
+    // parses this correctly (typename inside the `[]`). `obj_savejson` on
+    // the other hand puts the typename BEFORE the `{`, and the `obj_make`
+    // parser can't find it.
     char* body = obj_saveini(node);
     int myIdx = (int)out.size();
     out.emplace_back(parentIdx,
@@ -136,7 +137,7 @@ std::string SceneIO::saveTree(obj* root) {
 }
 
 std::string SceneIO::saveSubtree(obj* node) {
-    // saveTree-vel a kapott node mint a fa root-ja.
+    // saveTree with the given node as the root of the tree.
     return saveTree(node);
 }
 
@@ -214,8 +215,8 @@ LoadResult SceneIO::loadTreeDetailed(const std::string& json,
             } else if (!result.root) {
                 result.root = o;
             }
-            // Phase 4b — auto-migration: minden [asset:*] char* mezőt
-            // relatívra konvertálunk, ha abs+in-projekt.
+            // Phase 4b — auto-migration: we convert every [asset:*] char*
+            // field to relative, if abs+in-project.
             result.migrated_paths += migrateNodePaths(o, projectRoot);
             ++result.created;
         }
@@ -226,7 +227,7 @@ LoadResult SceneIO::loadTreeDetailed(const std::string& json,
     return result;
 }
 
-#if 0  // régi loadTree implementáció — lecserélve loadTreeDetailed-re.
+#if 0  // old loadTree implementation — replaced by loadTreeDetailed.
 obj* SceneIO::__unused_loadTree(const std::string& json) {
     json5 root = {0};
     char* err = json5_parse(&root, (char*)json.c_str(), 0);
@@ -261,7 +262,7 @@ obj* SceneIO::__unused_loadTree(const std::string& json) {
             else if (!strcmp(fn, "body"))   body = n->nodes[j].string;
         }
 
-        // Un-escape a body-t (a motor json5_parse as-is hagyja a `\\n`-t etc).
+        // Un-escape the body (the engine's json5_parse leaves `\\n` as-is etc).
         std::string realBody = unescapeJson5(body);
         obj* o = !realBody.empty() ? (obj*)obj_make(realBody.c_str()) : nullptr;
         if (o) {

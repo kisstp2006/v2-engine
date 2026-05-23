@@ -1,14 +1,14 @@
 #pragma once
 
-// IdeLauncher (Phase 6c). Vékony wrapper a `ide_helper.hpp` köré:
-//   - első használatkor cache-elt `detect_all()` (a regisztrációs scan
-//     50-200ms is lehet — nem akarjuk minden frame-ben),
-//   - "preferred for Lua" prioritás: VSCode > VSCode Insiders > első detected,
-//   - `openFile()` / `openFileAt()` egyszerű API a Project panel / Script
-//     Inspector hívásához.
+// IdeLauncher (Phase 6c). Thin wrapper around `ide_helper.hpp`:
+//   - cached `detect_all()` on first use (the registration scan can take
+//     50-200ms — we don't want it every frame),
+//   - "preferred for Lua" priority: VSCode > VSCode Insiders > first detected,
+//   - `openFile()` / `openFileAt()` simple API for the Project panel / Script
+//     Inspector to call.
 //
-// Ha a felhasználónak nincs telepített IDE-je, az `openFile()` false-t
-// ad vissza, és a hívó loggolja a warning-ot.
+// If the user has no IDE installed, `openFile()` returns false and the
+// caller logs the warning.
 
 #include <optional>
 #include <string>
@@ -22,21 +22,20 @@ class IdeLauncher {
 public:
     static IdeLauncher& instance();
 
-    // Frissíti a cache-elt detected-listát (drága; csak igény szerint).
+    // Refreshes the cached detected-list (expensive; only on demand).
     void refresh();
 
-    // Kérdezés a cache-ből — első használatkor automatikusan futtat
-    // `refresh()`-t.
+    // Query from the cache — runs `refresh()` automatically on first use.
     const std::vector<ide_helper::IDEInfo>& available();
 
-    // Visszaad egy preferált IDE-t .lua szerkesztéshez (VSCode prioritás,
-    // egyébként az első detected). `std::nullopt` ha semmi sincs.
+    // Returns a preferred IDE for editing .lua (VSCode priority, otherwise
+    // the first detected). `std::nullopt` if there is nothing.
     std::optional<ide_helper::IDEInfo> preferredForLua();
 
-    // Megnyitja a megadott absz-fájlt a preferált IDE-ben. true ha sikerült.
+    // Opens the given abs-file in the preferred IDE. true on success.
     bool openFile(const std::string& absPath);
 
-    // Megnyit egy fájlt egy konkrét sor/oszlopra (csak VSCode támogatja).
+    // Opens a file at a specific line/column (VSCode only).
     bool openFileAt(const std::string& absPath, int line = -1, int column = -1);
 
 private:

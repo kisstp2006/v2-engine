@@ -1,4 +1,4 @@
-// STL ELŐSZÖR.
+// STL FIRST.
 #include <any>
 #include <string>
 #include <vector>
@@ -42,7 +42,7 @@ void BuildPanel::wireUpIfNeeded(EditorApp& app) {
             lastResult_.clear();
             logTail_.clear();
             cookActive_ = true;
-            visible = true;        // auto-show induláskor
+            visible = true;        // auto-show on start
             pushLog(logTail_,
                 std::string("[started] ") + std::to_string(p->total) +
                 " files");
@@ -126,7 +126,7 @@ void BuildPanel::draw(EditorApp& app) {
         ImGui::TextDisabled("Current: -");
     }
 
-    // ---- Cancel gomb (csak cook közben) --------------------------------
+    // ---- Cancel button (only during cook) ------------------------------
     if (cookActive_) {
         if (ImGui::Button("Cancel Cook")) {
             app.requestCookCancel();

@@ -1,4 +1,4 @@
-// STL ELŐSZÖR.
+// STL FIRST.
 #include <algorithm>
 #include <cctype>
 #include <string>

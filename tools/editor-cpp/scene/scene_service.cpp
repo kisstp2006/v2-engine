@@ -12,8 +12,8 @@ SceneService::SceneService() {
 }
 
 SceneService::~SceneService() {
-    // A motor process-end-ig életben tartja az obj-t; nincs explicit free
-    // amíg M5+ nem hoz scene-save/load lifecycle-t.
+    // The engine keeps the obj alive until process-end; no explicit free
+    // until M5+ brings a scene-save/load lifecycle.
     root_ = nullptr;
 }
 

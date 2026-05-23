@@ -6,7 +6,7 @@
 namespace editor {
 
 namespace {
-// DFS: validRoot-ból minden elérhető node-ot egy std::vector-be gyűjt.
+// DFS: collects every node reachable from validRoot into a std::vector.
 void collectReachable(obj* node, std::vector<obj*>& out) {
     if (!node) return;
     out.push_back(node);
@@ -47,7 +47,7 @@ void SelectionService::sanitize(obj* validRoot) {
 void SelectionService::setPrimary(obj* o) {
     nodes_.clear();
     if (o) nodes_.push_back(o);
-    // Node-selection felülírja az asset-selection-t (kölcsönös exklúzivitás).
+    // Node-selection overrides asset-selection (mutual exclusivity).
     if (o && !assetPath_.empty()) clearSelectedAsset();
     emitChanged();
 }
@@ -81,7 +81,7 @@ void SelectionService::clear() {
 void SelectionService::setSelectedAsset(const std::string& absPath) {
     if (assetPath_ == absPath) return;
     assetPath_ = absPath;
-    // Asset-selection felülírja a node-selection-t (kölcsönös exklúzivitás).
+    // Asset-selection overrides node-selection (mutual exclusivity).
     if (!absPath.empty() && !nodes_.empty()) {
         nodes_.clear();
         emitChanged();

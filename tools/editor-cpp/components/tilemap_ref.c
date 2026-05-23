@@ -1,6 +1,6 @@
-// TilemapRef — TMX tilemap render-komponens. A motor `tiled()` parser-ét
-// használjuk, a tmx fájl tartalmát betöltjük `file_read`-del, és a Scene 2D
-// render-walk tiled_render-rel rajzolja.
+// TilemapRef — TMX tilemap render-component. We use the engine `tiled()`
+// parser, load the .tmx file content with `file_read`, and the Scene 2D
+// render-walk draws it with tiled_render.
 
 #include "engine.h"
 #include "components_api.h"

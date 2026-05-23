@@ -11,8 +11,8 @@
 
 namespace editor {
 
-// Abstract base — minden mutáció (gizmo drag, Inspector edit, add/delete node)
-// ezen át megy a CommandStack-be.
+// Abstract base — every mutation (gizmo drag, Inspector edit, add/delete node)
+// goes through this into the CommandStack.
 class Command {
 public:
     virtual ~Command() = default;
@@ -21,9 +21,9 @@ public:
     virtual const char* name() const = 0;
 };
 
-// Snapshot-alapú állapot-command. A `target` obj-jellegű node teljes
-// reflektált állapota a `before` és `after` INI-string-ben. Undo = before,
-// redo = after — mindkettő obj_mergeini-vel rekonstruál.
+// Snapshot-based state-command. The complete reflected state of the `target`
+// obj-like node lives in the `before` and `after` INI-strings. Undo = before,
+// redo = after — both reconstruct via obj_mergeini.
 class ObjectStateCommand : public Command {
 public:
     ObjectStateCommand(obj* target, std::string before, std::string after,
@@ -41,12 +41,12 @@ private:
     std::string name_;
 };
 
-// Add-node command (Phase 3d). A caller a node-ot már attach-elte a
-// parent-hez (a createXxx factory belül `obj_attach`-ol). A command az
-// undo/redo-hoz tárolja a pointereket — undo = detach, redo = re-attach.
+// Add-node command (Phase 3d). The caller has already attached the node to
+// the parent (the createXxx factory calls `obj_attach` internally). The
+// command stores the pointers for undo/redo — undo = detach, redo = re-attach.
 //
-// Dtor: ha a node undone-állapotban van (detach-elve, és a stack-ből kiesik),
-// `obj_free`-zi a memóriaszivárgás megelőzéseként.
+// Dtor: if the node is in an undone state (detached, and the stack drops it),
+// it `obj_free`s it to prevent memory leaks.
 class AddNodeCommand : public Command {
 public:
     AddNodeCommand(obj* parent, obj* node, std::string name = "Add");
@@ -61,12 +61,12 @@ private:
     std::string name_;
 };
 
-// Delete-node command (Phase 3d). A caller a node-ot már detach-elte (a
-// Delete-handler `obj_detach`-ol mielőtt push-olja a command-ot). Az undo
-// vissza-attach-eli a régi parent-re.
+// Delete-node command (Phase 3d). The caller has already detached the node
+// (the Delete-handler calls `obj_detach` before pushing the command). Undo
+// re-attaches it to the old parent.
 //
-// Dtor: ha a node detach-elt állapotban van (redo-state, a stack-ből kiesik),
-// `obj_free`-zi.
+// Dtor: if the node is in a detached state (redo-state, dropped from the
+// stack), it `obj_free`s it.
 class DeleteNodeCommand : public Command {
 public:
     DeleteNodeCommand(obj* parent, obj* node, std::string name = "Delete");
@@ -81,12 +81,12 @@ private:
     std::string name_;
 };
 
-// Reparent-command (Phase 3a). A node-ot oldParent-ből newParent-be áthelyezi.
-// A caller már megcsinálta a reparent-et (obj_attach(newParent, node)) — a
-// command csak az undo/redo-hoz tárolja a pointer-eket.
+// Reparent-command (Phase 3a). Moves the node from oldParent to newParent.
+// The caller has already done the reparent (obj_attach(newParent, node)) —
+// the command only stores the pointers for undo/redo.
 //
-// Megjegyzés: a motor `obj_attach(p, c)` belül `obj_detach(c)`-t hív, tehát
-// nem kell külön detach az áthelyezéshez.
+// Note: the engine's `obj_attach(p, c)` calls `obj_detach(c)` internally,
+// so a separate detach is not needed for the move.
 class ReparentCommand : public Command {
 public:
     ReparentCommand(obj* node, obj* oldParent, obj* newParent,
@@ -102,8 +102,8 @@ private:
     std::string name_;
 };
 
-// Multi-target snapshot-command (Phase 2c). Pár (node + before + after)
-// vektorokkal — Inspector multi-edit és multi-gizmo-drag undo-támogatás.
+// Multi-target snapshot-command (Phase 2c). With pair (node + before + after)
+// vectors — Inspector multi-edit and multi-gizmo-drag undo support.
 class MultiObjectStateCommand : public Command {
 public:
     MultiObjectStateCommand(std::vector<obj*> targets,
@@ -114,7 +114,7 @@ public:
     void redo() override;
     const char* name() const override { return name_.c_str(); }
 
-    // snapshotAll(nodes) — minden node-ra obj_saveini.
+    // snapshotAll(nodes) — obj_saveini for every node.
     static std::vector<std::string> snapshotAll(const std::vector<obj*>& nodes);
 
 private:
@@ -126,14 +126,14 @@ private:
 
 class EventBus;
 
-// Undo/Redo stack. Max 256 lépés, LRU evict. Új mutáció törli a redo stack-et.
+// Undo/Redo stack. Max 256 steps, LRU evict. A new mutation clears the redo stack.
 class CommandStack {
 public:
     static constexpr size_t kMaxDepth = 256;
 
     void setBus(EventBus* bus) { bus_ = bus; }
 
-    // Egyetlen command beadása (nem transaction).
+    // Push a single command (not a transaction).
     void execute(std::unique_ptr<Command> cmd);
 
     void undo();

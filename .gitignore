@@ -2,20 +2,16 @@
 # v2 engine + editor — gitignore
 # ============================================================================
 
-# ---- Build outputs (root) --------------------------------------------------
-editor-cpp.exe
-editor-cpp.exp
-editor-cpp.ilk
-editor-cpp.lib
-editor-cpp.obj
-editor-cpp.pdb
-hello.exe
-hello.exp
-hello.ilk
-hello.lib
-hello.obj
-hello.pdb
-vc140.pdb
+# ---- Build outputs (binaries — anywhere in the tree) ----------------------
+# Executables, DLLs and import-libs are all rebuilt from source by MAKE.bat /
+# BUILD.bat; the prebuilt ones under ext/ext-backend-*/x64/ get regenerated
+# on first build too. Keeping them out of git keeps the repo small.
+*.exe
+*.dll
+*.lib
+*.exp
+*.ilk
+*.pdb
 
 # ---- Object files (MAKE.bat dumps every translation unit to root) ---------
 *.obj
@@ -62,9 +58,9 @@ $RECYCLE.BIN/
 *.log
 
 # ---- Engine cook-cache (in-place .X.png hidden-prefix from cook() recipe) -
-# Példa: assets/audio/.foo.mp3 (a motor cook-cache rejtett-prefix fájlokat
-# generál minden cook(path)-hoz). MAKE.bat tidy egyébként törli.
-# A pattern bizonytalan ezért a meglevő egyértelmű kiterjesztéseket fedjük le.
+# Example: assets/audio/.foo.mp3 (the engine cook-cache generates hidden-
+# prefix files for every cook(path)). MAKE.bat tidy clears them otherwise.
+# The pattern is fuzzy so we list the known extensions explicitly.
 **/.*.png
 **/.*.jpg
 **/.*.jpeg

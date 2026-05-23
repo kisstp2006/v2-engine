@@ -1,4 +1,4 @@
-// STL ELŐSZÖR.
+// STL FIRST.
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -56,15 +56,15 @@ inline vec3 mkv3(float x, float y, float z) {
     vec3 v; v.x = x; v.y = y; v.z = z; return v;
 }
 
-// Motor camera_freefly replikája az `ui_hovered() || ui_active()` ellenőrzés
-// nélkül — mert a Scene panel ImGui::Image-e maga is hovered widget, és
-// emiatt a motor freefly mindig blokkolná a kamerát. Mi a `blocked`
-// paramétert magunk határozzuk meg panel-szinten.
+// Replica of the motor's camera_freefly without the `ui_hovered() || ui_active()`
+// check — because the Scene panel's ImGui::Image is itself a hovered widget, and
+// that would always cause the motor freefly to block the camera. We
+// determine the `blocked` parameter ourselves at the panel level.
 void editorFreefly(camera_t* cam, bool blocked) {
     cam->damping = true;
     bool active = !blocked && (input(MOUSE_L) || input(MOUSE_M) || input(MOUSE_R));
-    // Phase 3e — ESC mindig felszabadítja a cursor-t freefly-ből (cursor-stuck
-    // a fókusz-vesztés / Alt+Tab esetén). A run-loop ESC-quit-je megszűnt.
+    // Phase 3e — ESC always releases the cursor from freefly (cursor-stuck
+    // on focus-loss / Alt+Tab). The run-loop ESC-quit has been removed.
     if (input(KEY_ESC)) active = false;
     mouse_show(!active);
     int mult_speed = input(KEY_LSHIFT) || input(KEY_LALT);
@@ -101,14 +101,14 @@ void ScenePanel::renderMeshNode(obj* node, EditorApp& app,
     const char* relPath = editor_mesh_renderer_path(node);
     if (!relPath || !*relPath) return;
 
-    // Phase 4a — render-idő abs-resolve. A tárolt path projekt-relatív,
-    // de a motor `model()` / `is_file()` abszolútat vár. A cache-key abs.
+    // Phase 4a — render-time abs-resolve. The stored path is project-relative,
+    // but the motor's `model()` / `is_file()` expect absolute. The cache-key is abs.
     std::string absPath = asset_path::toAbsolute(relPath, app.projectPath());
     const std::string& path = absPath;
 
-    // FailedPaths timeout — ha a felhasználó kicserélte a fájlt a lemezen,
-    // 2 másodperc után újra-próba. Mtime-poll: ha a fájl mtime-ja változott
-    // (pl. új .iqm), cache-evict.
+    // FailedPaths timeout — if the user replaced the file on disk,
+    // retry after 2 seconds. Mtime-poll: if the file's mtime has changed
+    // (e.g. a new .iqm), cache-evict.
     if (failedPaths_.isFresh(path)) return;
     failedPaths_.erase(path);
     if (!is_file(path.c_str())) {
@@ -138,21 +138,21 @@ void ScenePanel::renderMeshNode(obj* node, EditorApp& app,
         app.bus().emit("log", std::string("[Mesh] loaded: ") + relPath);
     }
 
-    // Beadjuk a fényeket + shadowmap-et a modelnek a render előtt
-    // (`model_light/shadow` non-const pointert vár).
+    // Feed the lights + shadowmap to the model before render
+    // (`model_light/shadow` expects a non-const pointer).
     if (!lights.empty()) {
         model_light(&it->second, (unsigned)lights.size(),
                     const_cast<light_t*>(lights.data()));
     } else {
         model_light(&it->second, 0, nullptr);
     }
-    // Shadowmap pipeline kikapcsolva → mindig nullptr-t adunk.
+    // Shadowmap pipeline disabled → we always pass nullptr.
     model_shadow(&it->second, nullptr);
     (void)lights;
 
     mat44 pivot;
     editor_mesh_renderer_compose_pivot(node, pivot);
-    // pass = -1 → minden default pass (lighting, shading, shadow-sampling).
+    // pass = -1 → every default pass (lighting, shading, shadow-sampling).
     model_render(&it->second, cam_.proj, cam_.view, &pivot, 1, -1);
 }
 
@@ -162,7 +162,7 @@ void ScenePanel::renderMeshShadowOnly(obj* node, EditorApp& app) {
     std::string absPath = asset_path::toAbsolute(relPath, app.projectPath());
     if (failedPaths_.isFresh(absPath)) return;
     auto it = modelCache_.find(absPath);
-    if (it == modelCache_.end()) return;   // model még nem cache-elt
+    if (it == modelCache_.end()) return;   // model not yet cached
     mat44 pivot;
     editor_mesh_renderer_compose_pivot(node, pivot);
     model_render(&it->second, cam_.proj, cam_.view, &pivot, 1,
@@ -218,25 +218,25 @@ void ScenePanel::renderScene(int w, int h, bool inputAllowed, EditorApp& app) {
     ddraw_grid(0);
     ddraw_flush();
 
-    // Spatial audio listener pos = a Scene editor-kamera pozíciója (Play módban).
+    // Spatial audio listener pos = the Scene editor-camera position (in Play mode).
     float listenerPos[3] = { cam_.position.x, cam_.position.y, cam_.position.z };
     app.play().updateAudio(app, listenerPos);
 
-    // 1) fény-gyűjtés.
+    // 1) light gathering.
     std::vector<light_t> lights;
     collectLights(app.scene().root(), lights);
 
-    // 2) shadowmap pass — KIKAPCSOLVA (motor pipeline crashel). A LightRef
-    // `cast_shadows` mezőjét az `editor_light_ref_to_light_t` hardcoded false-
-    // ként adja a motornak, így itt sem fut shadowmap_*. M16+ alatt javítás.
+    // 2) shadowmap pass — DISABLED (motor pipeline crashes). The LightRef's
+    // `cast_shadows` field is handed to the motor as hardcoded false by
+    // `editor_light_ref_to_light_t`, so shadowmap_* doesn't run here either. Fix in M16+.
 
-    // 3) main render pass — fényekkel + shadowmap-pel.
+    // 3) main render pass — with lights + shadowmap.
     walkAndRender(app.scene().root(), app, lights);
 
-    // 4) Script `on_draw` callback-ek (csak Play-mode-ban). Az editor Scene
-    // panelben is mutatjuk, hogy a script-effektek azonnal láthatók legyenek
-    // Camera-node nélkül is. A ddraw_flush kell hogy a script ddraw_* hívásai
-    // ténylegesen renderelődjenek az FBO-ba.
+    // 4) Script `on_draw` callbacks (only in Play-mode). We also show in the
+    // editor Scene panel so that script-effects are visible immediately
+    // even without a Camera-node. The ddraw_flush is needed so the script's
+    // ddraw_* calls actually render into the FBO.
     if (app.play().isPlaying()) {
         app.scriptHost().drawAll();
         ddraw_flush();
@@ -256,16 +256,16 @@ void ScenePanel::draw(EditorApp& app) {
     int w = (int)avail.x;
     int h = (int)avail.y;
 
-    // A gizmo-drag közben tiltsuk a freefly kamerát.
+    // Disable the freefly camera during gizmo-drag.
     const bool gizmoBusy = ImGuizmo_IsUsing();
     const bool inputAllowed = (ImGui::IsWindowHovered() ||
                                ImGui::IsWindowFocused()) && !gizmoBusy;
 
     if (w > 0 && h > 0) {
         ensureFbo(w, h);
-        // Trap-window: a motor `igText("uniform ... not found")` warning-jai
-        // az aktuális ImGui-window-ba (a Scene-be) írnának. Off-screen trap-be
-        // tereljük őket hogy ne zavarjanak.
+        // Trap-window: the motor's `igText("uniform ... not found")` warnings
+        // would write into the current ImGui-window (the Scene). We redirect them
+        // into an off-screen trap so they don't get in the way.
         ImGui::SetNextWindowPos(ImVec2(-9999, -9999));
         ImGui::SetNextWindowSize(ImVec2(1, 1));
         ImGui::Begin("##fbo-render-trap-scene", nullptr,
@@ -278,12 +278,12 @@ void ScenePanel::draw(EditorApp& app) {
         renderScene(w, h, inputAllowed, app);
         ImGui::End();
 
-        // Az OpenGL texture v-koord fent kezdődik, az ImGui lent → uv0/uv1 flip.
+        // The OpenGL texture v-coord starts at the top, ImGui at the bottom → uv0/uv1 flip.
         ImGui::Image((ImTextureID)(uintptr_t)fbo_.texture_color.id,
                      ImVec2((float)w, (float)h),
                      ImVec2(0, 1), ImVec2(1, 0));
 
-        // Drop target — 3D-vel kompatibilis assetek (.iqm, .gltf).
+        // Drop target — assets compatible with 3D (.iqm, .gltf).
         if (ImGui::BeginDragDropTarget()) {
             if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("ASSET_PATH")) {
                 std::string path((const char*)p->Data);
@@ -303,8 +303,8 @@ void ScenePanel::draw(EditorApp& app) {
             ImGui::EndDragDropTarget();
         }
 
-        // Translate/Rotate/Scale gizmo overlay — CSAK 3D komponensekre.
-        // A 2D komponensek (Sprite, Tilemap) gizmo-ja a Scene 2D panelben jön elő.
+        // Translate/Rotate/Scale gizmo overlay — ONLY for 3D components.
+        // The gizmo for 2D components (Sprite, Tilemap) appears in the Scene 2D panel.
         obj* sel = app.selection().primary();
         vec3* posPtr   = (sel && editor_obj_is_3d_component(sel))
                          ? editor_obj_pos_addr(sel) : nullptr;
@@ -318,7 +318,7 @@ void ScenePanel::draw(EditorApp& app) {
             ImGuizmo_SetDrawlist(ImGui::GetWindowDrawList());
             ImGuizmo_SetOrthographic(false);
 
-            // Pos + rot + scale model-mátrix (M15: T/R/S mind támogatott).
+            // Pos + rot + scale model-matrix (M15: T/R/S all supported).
             float matrix[16];
             float t[3] = { posPtr->x, posPtr->y, posPtr->z };
             float r[3] = { rotPtr   ? rotPtr->x   : 0,
@@ -355,12 +355,12 @@ void ScenePanel::draw(EditorApp& app) {
         // Gizmo drag → transaction edge-detection.
         bool isUsing = ImGuizmo_IsUsing();
         if (isUsing && !wasUsingGizmo_) {
-            // Drag start — előtte snapshot
+            // Drag start — snapshot before
             gizmoTarget_ = sel;
             gizmoSnapshotBefore_ = ObjectStateCommand::snapshot(sel);
         }
         if (!isUsing && wasUsingGizmo_) {
-            // Drag end — utána snapshot + execute (csak ha tényleg változott)
+            // Drag end — snapshot after + execute (only if actually changed)
             std::string after = ObjectStateCommand::snapshot(gizmoTarget_);
             if (after != gizmoSnapshotBefore_) {
                 app.commands().execute(std::make_unique<ObjectStateCommand>(

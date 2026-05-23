@@ -1,8 +1,8 @@
-// Script — Lua szkript-komponens (M17). A .lua-fájl path-ját tárolja; a
-// Play mode `ScriptHost` aktiválja: per-Script `lua_State*`, on_init /
-// on_update(dt) / on_draw / on_quit callback-ek pcall-lal. Mtime-poll
-// auto-reload. A runtime állapot (`vm_handle`) a C++ ScriptHost-ban él,
-// itt csak opaque pointerként tároljuk és NEM serializáljuk.
+// Script — Lua script-component (M17). Stores the path to the .lua file;
+// Play mode `ScriptHost` activates each one: per-Script `lua_State*`,
+// on_init / on_update(dt) / on_draw / on_quit callbacks with pcall.
+// Mtime-poll auto-reload. The runtime state (`vm_handle`) lives in the
+// C++ ScriptHost; here we keep an opaque pointer and do NOT serialize it.
 
 #include "engine.h"
 #include "components_api.h"
@@ -13,7 +13,7 @@ typedef struct Script {
     char *script_path;
     int   auto_reload;   // 0/1 [bool]
     int   enabled;       // 0/1 [bool]
-    void *vm_handle;     // opaque — NEM regisztrált STRUCT()-tal
+    void *vm_handle;     // opaque — NOT registered with STRUCT()
 } Script;
 
 OBJTYPEDEF(Script, 71);
@@ -22,8 +22,8 @@ AUTORUN {
     STRUCT(Script, char*, script_path, "[asset:script]");
     STRUCT(Script, int,   auto_reload, "[bool]");
     STRUCT(Script, int,   enabled,     "[bool]");
-    /* vm_handle szándékosan kihagyva: void* nem serializálható,
-       a runtime állapot a ScriptHost C++-map-ben van. */
+    /* vm_handle intentionally skipped: void* is not serializable,
+       the runtime state lives in the ScriptHost C++-map. */
 }
 
 obj* editor_obj_new_script(obj* parent, const char* name,
@@ -31,7 +31,7 @@ obj* editor_obj_new_script(obj* parent, const char* name,
     Script* s = obj_new_name(Script, name ? name : "Script");
     if (parent) obj_attach(parent, s);
     if (script_path && *script_path) s->script_path = STRDUP(script_path);
-    s->auto_reload = 1;   // default ON (felhasználói döntés Phase 3-ban)
+    s->auto_reload = 1;   // default ON (user-decided in Phase 3)
     s->enabled    = 1;
     s->vm_handle  = NULL;
     return (obj*)s;

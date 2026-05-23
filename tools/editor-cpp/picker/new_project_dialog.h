@@ -4,15 +4,15 @@
 
 namespace editor {
 
-// Modal dialog új projekt létrehozására.
-// Használat: `wantsOpen` flag-et set-elsz amikor a "New Project" gombra
-// kattintanak; az `update()` minden frame fut és kezeli a modal life-cycle-t.
-// Ha a felhasználó létrehozott egy projektet, `created()` true-t ad vissza
-// és `createdPath()` adja a teljes mappa-path-t.
+// Modal dialog for creating a new project.
+// Usage: set the `wantsOpen` flag when the "New Project" button is clicked;
+// `update()` runs every frame and manages the modal life-cycle.
+// If the user created a project, `created()` returns true and
+// `createdPath()` gives the full folder path.
 class NewProjectDialog {
 public:
-    void requestOpen();    // a következő `update()`-nél megnyit
-    void update();         // minden frame meghívni
+    void requestOpen();    // opens on the next `update()`
+    void update();         // call every frame
     bool created() const { return created_; }
     void clearCreated() { created_ = false; }
     const std::string& createdPath() const { return createdPath_; }

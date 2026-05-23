@@ -7,8 +7,8 @@
 
 namespace editor {
 
-// Log-entry severity. A draw `ImGui::TextColored`-ot rajzol severity szerint:
-// Info=fehér, Warn=sárga, Error=piros.
+// Log-entry severity. draw uses `ImGui::TextColored` based on severity:
+// Info=white, Warn=yellow, Error=red.
 enum class LogSeverity { Info, Warn, Error };
 
 struct LogEntry {
@@ -21,7 +21,7 @@ public:
     ConsolePanel() : Panel("console", "Console") {}
     void draw(EditorApp& app) override;
 
-    // Backward-compat: severity-NÉLKÜLI overload → Info.
+    // Backward-compat: overload WITHOUT severity → Info.
     void log(const std::string& msg) { log(msg, LogSeverity::Info); }
     void log(const std::string& msg, LogSeverity sev);
     void clear() { lines_.clear(); }

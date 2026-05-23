@@ -1,4 +1,4 @@
-// STL ELŐSZÖR.
+// STL FIRST.
 #include <optional>
 #include <string>
 #include <vector>
@@ -26,13 +26,13 @@ std::optional<ide_helper::IDEInfo> IdeLauncher::preferredForLua() {
     const auto& list = available();
     if (list.empty()) return std::nullopt;
 
-    // VSCode prioritás (Insiders is OK ha nincs sima).
+    // VSCode priority (Insiders is OK if there is no plain one).
     for (const auto& i : list)
         if (i.id == ide_helper::IDE::VSCode) return i;
     for (const auto& i : list)
         if (i.id == ide_helper::IDE::VSCodeInsiders) return i;
 
-    // Bármi (első detected).
+    // Anything (first detected).
     return list.front();
 }
 

@@ -1,29 +1,40 @@
 # editor-cpp
 
-Unity-stílusú C++ + Dear ImGui szerkesztő a v2 motorhoz. Tervfájl: `~/.claude/plans/fizzy-jingling-bumblebee.md`.
+Dear ImGui based C++ scene editor for the v2 engine.
 
 ## Build
 
-A `tools/editor-cpp/` mappában futtasd:
+In the `tools/editor-cpp/` folder, run:
 
 ```bat
 BUILD.bat
 ```
 
-Első futás (hideg build): ~30-60 mp, mert a `MAKE.bat` lefordítja a motor `native.obj` és `backend.obj` cache-jét is. Következő futás: ~5-10 mp.
+First run (cold build): ~30-60 sec, because `MAKE.bat` also compiles the engine's `native.obj` and `backend.obj` cache. Subsequent runs: ~5-10 sec.
 
 ## Run
 
-A repo gyökeréből:
+From the repo root:
 
 ```bat
 editor-cpp.exe
 ```
 
-`ESC`: kilép.
+`ESC`: quit.
 
-## Status
+## Features
 
-**M0a** — bootstrap kész. Üres OS ablak nyílik. Még nincs ImGui UI, nincs custom theme.
+- Hierarchy / Inspector / Project / Scene / Scene 2D / Game / Console / Build panels
+- Reflection-driven Inspector with hint-string controls (`[range]`, `[color3]`, `[multiline]`, `[asset:...]`, ...)
+- Translate / Rotate / Scale gizmos (W / E / R hotkeys)
+- Multi-select + undo/redo (Ctrl+Z / Ctrl+Y)
+- Play / Pause / Stop with snapshot-restore
+- Drag-drop reparenting in Hierarchy, drag-drop asset spawn in Scene panels
+- JSON5 scene persistence
+- Prefab clone + save
+- Lua scripting with hot-reload (per-Script LuaJIT VM, `engine.ffi` + `node.*` helpers)
+- Project cook + AssetValidator (threaded, with progress UI)
+- VSCode / JetBrains EmmyLua IntelliSense via auto-generated `engine.d.lua`
 
-Következő: **M0b** — custom theme + B612 font + Material Symbols.
+Built-in component types: Transform, MeshRenderer, SpriteRenderer, TilemapRef,
+LightRef (DIR / POINT / SPOT + shadows), CameraRef, AudioSource (spatial), Script.

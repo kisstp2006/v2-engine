@@ -12,7 +12,7 @@ int editor_obj_child_count(const obj* parent) {
     array(obj*)* ch = obj_children(parent);
     if (!ch) return 0;
     int n = array_count(*ch);
-    /* child[0] = back-pointer to parent (motor konvenció), [1..] real children */
+    /* child[0] = back-pointer to parent (engine convention), [1..] real children */
     return n > 1 ? n - 1 : 0;
 }
 
@@ -55,7 +55,7 @@ vec3* editor_obj_rot_addr(obj* o) {
     if ((p = editor_mesh_renderer_rot_addr(o)))   return p;
     if ((p = editor_sprite_renderer_rot_addr(o))) return p;
     if ((p = editor_tilemap_ref_rot_addr(o)))     return p;
-    return NULL;   /* LightRef-en nincs rot */
+    return NULL;   /* LightRef has no rot */
 }
 
 vec3* editor_obj_scale_addr(obj* o) {

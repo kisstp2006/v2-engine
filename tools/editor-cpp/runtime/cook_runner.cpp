@@ -1,4 +1,4 @@
-// STL ELŐSZÖR.
+// STL FIRST.
 #include <atomic>
 #include <filesystem>
 #include <memory>
@@ -23,12 +23,12 @@ namespace editor {
 
 namespace {
 
-// Az ext-cook/demo.c-ből vett konvenció: ULZ tömörítés, level 1.
+// Convention taken from ext-cook/demo.c: ULZ compression, level 1.
 // (`code/obj/obj_pack_compress.h`: COMPRESS_ULZ = 2<<4 = 32.)
 constexpr unsigned kZipCompressFlags = (2u << 4) | 1u;
 
-// A `cook()` cache-key egy `.<filename>` rejtett fájl. NE cookoljuk újra
-// a már cookolt fájlokat (mint az ext-cook/demo.c is csinálja).
+// The `cook()` cache-key is a `.<filename>` hidden file. DO NOT re-cook
+// already-cooked files (as ext-cook/demo.c also does).
 bool isHiddenCookedFile(const std::string& absPath) {
     namespace fs = std::filesystem;
     std::string name = fs::path(absPath).filename().string();
@@ -54,9 +54,9 @@ void CookRunner::joinIfDone() {
 bool CookRunner::startCookInPlace(std::vector<std::string> absPaths) {
     bool expected = false;
     if (!running_.compare_exchange_strong(expected, true)) {
-        return false;       // már fut egy cook
+        return false;       // a cook is already running
     }
-    if (worker_.joinable()) worker_.join();   // előző join (ha kimaradt)
+    if (worker_.joinable()) worker_.join();   // previous join (if missed)
     cancel_requested_.store(false);
     progress_current_.store(0);
     progress_total_.store((int)absPaths.size());
@@ -82,7 +82,7 @@ bool CookRunner::startBuildZip(std::vector<std::string> absPaths,
     return true;
 }
 
-// ---- Worker-side implementáció --------------------------------------------
+// ---- Worker-side implementation --------------------------------------------
 
 void CookRunner::workerInPlace(std::vector<std::string> paths) {
     const std::string projectRoot = app_.projectPath();
@@ -110,8 +110,8 @@ void CookRunner::workerInPlace(std::vector<std::string> paths) {
             continue;
         }
 
-        // A motor `cook()` szinkron blokkoló, NEM thread-safe — de mi
-        // garantáljuk hogy egyszerre csak egy worker fut (running_ atomic).
+        // The engine's `cook()` is synchronous-blocking and NOT thread-safe —
+        // but we guarantee that only one worker runs at a time (running_ atomic).
         const char* out = cook(abs.c_str());
         const bool ok = (out != nullptr);
         if (ok) ++succeeded; else ++failed;
@@ -152,7 +152,7 @@ void CookRunner::workerZip(std::vector<std::string> paths,
                            std::string              zipPath) {
     const std::string projectRoot = app_.projectPath();
 
-    // zip_open "wb" → új zip vagy felülírja a meglévőt.
+    // zip_open "wb" → new zip or overwrite existing.
     zip_t* z = zip_open(zipPath.c_str(), "wb");
     if (!z) {
         queue_.enqueue([this, zipPath]() {
@@ -187,14 +187,14 @@ void CookRunner::workerZip(std::vector<std::string> paths,
             continue;
         }
 
-        // file_read() triggereli a motor automata-cook-ot (file_handle()
-        // belül cook(path)-t hív, és ha van recipe → a cookolt tartalmat
-        // adja vissza). Tehát itt nem kell külön cook()-ot hívni.
+        // file_read() triggers the engine's auto-cook (file_handle() calls
+        // cook(path) internally, and if there's a recipe → returns the cooked
+        // content). So we don't need to call cook() separately here.
         int size = 0;
         char* data = file_read(abs.c_str(), &size);
         bool ok = (data != nullptr && size >= 0);
         if (ok) {
-            // Zip-ben relatív path-ot tárolunk (a runtime is így keresi).
+            // We store relative paths in the Zip (the runtime also looks for them this way).
             std::string rel = asset_path::toProjectRelative(abs, projectRoot);
             ok = zip_append_mem(z, rel.c_str(), "", data, (unsigned)size,
                                 kZipCompressFlags);

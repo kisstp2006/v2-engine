@@ -1,43 +1,43 @@
 #pragma once
 
-// Component-pattern boilerplate macro-k. Két csoport:
-//   1) STRUCT-mező-deklarálók (Godot-szerű "minden Spatial node-nak van
-//      pos/rot/scale" pattern, makró-szintű embed):
+// Component-pattern boilerplate macros. Two groups:
+//   1) STRUCT-field-declarators (Godot-style "every Spatial node has
+//      pos/rot/scale" pattern, macro-level embed):
 //      - COMPONENT_TRS   — pos+rot+scale (Transform, Mesh/Sprite/Tilemap-renderer)
-//      - COMPONENT_POS   — csak pos (Light/Camera/Audio)
-//      - STRUCT_TRS / STRUCT_POS — a STRUCT()-reg ugyanezekre.
+//      - COMPONENT_POS   — pos only (Light/Camera/Audio)
+//      - STRUCT_TRS / STRUCT_POS — the STRUCT()-reg counterparts.
 //   2) Accessor-pattern (is_xxx / pos_addr / rot_addr / scale_addr) — Phase 2a.
 //
-// A `Type` a C-struct neve (pl. `MeshRenderer`). A `snake` a snake-case
-// alak (pl. `mesh_renderer`) — ezt manuálisan kell megadni, mert a C
-// preprocessor nem tud snake-case konverziót csinálni.
+// `Type` is the C-struct name (e.g. `MeshRenderer`). `snake` is the snake-case
+// form (e.g. `mesh_renderer`) — must be passed manually because the C
+// preprocessor can't do snake-case conversion.
 //
-// MINDEGYIK macro `API`-val deklarál, így a __declspec(dllexport) érvényes
-// (a LuaJIT FFI a process-szimbólumokból resolválja ezeket).
+// EVERY macro declares with `API`, so __declspec(dllexport) is in effect
+// (the LuaJIT FFI resolves these from the process symbols).
 //
-// Példa:
+// Example:
 //   EDITOR_COMPONENT_IS(MeshRenderer, mesh_renderer)
 //   EDITOR_COMPONENT_POS_ADDR(MeshRenderer, mesh_renderer)
 //   EDITOR_COMPONENT_ROT_ADDR(MeshRenderer, mesh_renderer)
 //   EDITOR_COMPONENT_SCALE_ADDR(MeshRenderer, mesh_renderer)
 //
-// Vagy egyszerre, ha mindhárom transform-mező megvan:
+// Or in one go, if all three transform-fields are present:
 //   EDITOR_COMPONENT_BASE(MeshRenderer, mesh_renderer)
 
-// ---- 1) STRUCT-mező-embed --------------------------------------------------
+// ---- 1) STRUCT-field-embed ------------------------------------------------
 
-// pos+rot+scale a struct-elejére. Használat:
+// pos+rot+scale at the start of the struct. Usage:
 //   typedef struct Mesh { OBJ COMPONENT_TRS char* model_path; ... } Mesh;
 #define COMPONENT_TRS                                               \
     vec3 pos;                                                       \
     vec3 rot;                                                       \
     vec3 scale;
 
-// csak pos (Light/Camera/Audio — rot/scale értelmetlen rajtuk).
+// pos only (Light/Camera/Audio — rot/scale don't make sense on them).
 #define COMPONENT_POS                                               \
     vec3 pos;
 
-// STRUCT-reg AUTORUN-on belül a 3 transform-mezőre. A `Type` a C-struct.
+// STRUCT-reg inside AUTORUN for the 3 transform-fields. `Type` is the C-struct.
 #define STRUCT_TRS(Type)                                            \
     STRUCT(Type, vec3, pos);                                        \
     STRUCT(Type, vec3, rot);                                        \
@@ -71,7 +71,7 @@
         return &((Type*)o)->scale;                                  \
     }
 
-// All-in-one a teljes transform-tagolású komponensekre
+// All-in-one for components with the full transform set
 // (Transform, MeshRenderer, SpriteRenderer, TilemapRef).
 #define EDITOR_COMPONENT_BASE(Type, snake)                          \
     EDITOR_COMPONENT_IS       (Type, snake)                         \
@@ -79,7 +79,7 @@
     EDITOR_COMPONENT_ROT_ADDR (Type, snake)                         \
     EDITOR_COMPONENT_SCALE_ADDR(Type, snake)
 
-// Csak `pos`-tartalmazó komponensekre (LightRef, CameraRef, AudioSource).
+// For components with `pos` only (LightRef, CameraRef, AudioSource).
 #define EDITOR_COMPONENT_POS_ONLY(Type, snake)                      \
     EDITOR_COMPONENT_IS       (Type, snake)                         \
     EDITOR_COMPONENT_POS_ADDR (Type, snake)

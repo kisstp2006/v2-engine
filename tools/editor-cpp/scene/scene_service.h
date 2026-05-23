@@ -2,18 +2,18 @@
 
 #include "engine.h"
 #ifdef obj
-#undef obj   // lásd magyarázat a selection_service.h-ban
+#undef obj   // see explanation in selection_service.h
 #endif
 
 namespace editor {
 
 class EventBus;
 
-// A scene root `obj*`-jának owner-je. A SceneService egy példánya
-// az EditorApp lifetime-ja alatt él, és a scene fát itt indítjuk.
+// Owner of the scene root `obj*`. A single SceneService instance lives
+// for the duration of EditorApp's lifetime, and the scene tree starts here.
 //
-// `replaceRoot()` `kEvtSceneReplaced` event-et emit a `bus`-on (ha be van
-// állítva), hogy a SelectionService/ScriptHost/AssetCache takaríthassanak.
+// `replaceRoot()` emits a `kEvtSceneReplaced` event on `bus` (when set),
+// so SelectionService/ScriptHost/AssetCache can clean up.
 class SceneService {
 public:
     SceneService();
@@ -21,12 +21,12 @@ public:
     SceneService(const SceneService&) = delete;
     SceneService& operator=(const SceneService&) = delete;
 
-    // Az EditorApp beállítja init-kor; nélküle a replaceRoot nem emit-el.
+    // EditorApp sets it at init; without it replaceRoot does not emit.
     void setBus(EventBus* bus) { bus_ = bus; }
 
     obj* root() const { return root_; }
-    // A meglévő root-ot lecseréli az új-ra. A régi a motor object-pool-ban
-    // marad. A `kEvtSceneReplaced` event-et emit a beállított bus-on.
+    // Replaces the existing root with the new one. The old one stays in the
+    // engine's object pool. Emits a `kEvtSceneReplaced` event on the set bus.
     void replaceRoot(obj* newRoot);
 
 private:

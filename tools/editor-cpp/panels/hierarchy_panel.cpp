@@ -1,4 +1,4 @@
-// STL ELŐSZÖR.
+// STL FIRST.
 #include <memory>
 #include <string>
 #include <vector>
@@ -43,7 +43,7 @@ void renderNode(EditorApp& app, obj* node) {
     bool open = ImGui::TreeNodeEx((void*)node, flags, "%s",
                                   name ? name : "(unnamed)");
     if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
-        // Ctrl+kattint → toggle, sima kattint → cseréli a selection-t.
+        // Ctrl+click → toggle, plain click → replaces the selection.
         if (ImGui::GetIO().KeyCtrl) {
             app.selection().toggle(node);
         } else {
@@ -51,8 +51,8 @@ void renderNode(EditorApp& app, obj* node) {
         }
     }
 
-    // ----- DragDropSource — minden node-ból lehet húzni, KIVÉVE a root-ot.
-    // (A root reparent-elése nem értelmezhető — a scene-fa gyökere.)
+    // ----- DragDropSource — any node can be dragged, EXCEPT the root.
+    // (Reparenting the root makes no sense — it is the scene-tree root.)
     if (!isRoot) {
         if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
             obj* payload = node;
@@ -62,23 +62,23 @@ void renderNode(EditorApp& app, obj* node) {
         }
     }
 
-    // ----- DragDropTarget — bármely node lehet drop-target.
-    // Cycle-detection: drop-target NEM lehet a dragged node leszármazottja
-    // (és nem lehet maga a dragged node sem).
+    // ----- DragDropTarget — any node can be a drop-target.
+    // Cycle-detection: the drop-target CANNOT be a descendant of the dragged node
+    // (and cannot be the dragged node itself).
     if (ImGui::BeginDragDropTarget()) {
         if (const ImGuiPayload* payload =
                 ImGui::AcceptDragDropPayload("HIER_NODE")) {
             obj* draggedNode = *(obj**)payload->Data;
             if (draggedNode && draggedNode != node) {
                 if (editor_obj_is_ancestor(draggedNode, node)) {
-                    // Ciklus tilos.
+                    // Cycle forbidden.
                     app.bus().emit(kEvtLogWarn, std::string(
                         "Reparent rejected: target is descendant of source"));
                 } else if (obj_parent(draggedNode) == node) {
-                    // No-op — már ennek a node-nak a child-je.
+                    // No-op — already a child of this node.
                 } else {
                     obj* oldParent = obj_parent(draggedNode);
-                    obj_attach(node, draggedNode);  // motor előtte detach
+                    obj_attach(node, draggedNode);  // motor detaches first
                     app.commands().execute(
                         std::make_unique<ReparentCommand>(
                             draggedNode, oldParent, node, "Reparent"));
@@ -91,10 +91,10 @@ void renderNode(EditorApp& app, obj* node) {
         ImGui::EndDragDropTarget();
     }
 
-    // Per-node kontextus-menü (jobb-klikk az item-en). `nullptr` ID =
-    // az aktuális item (TreeNodeEx) saját ID-jét használja, ami unique a
-    // node-pointer-rel — különben az ütközés egyszerre nyitja az összes
-    // popup-ot.
+    // Per-node context menu (right-click on the item). `nullptr` ID =
+    // uses the current item's (TreeNodeEx) own ID, which is unique per
+    // node-pointer — otherwise the collision would open all popups
+    // at once.
     if (ImGui::BeginPopupContextItem(nullptr)) {
         if (!app.selection().contains(node)) {
             app.selection().setPrimary(node);
@@ -117,8 +117,8 @@ void renderNode(EditorApp& app, obj* node) {
 void HierarchyPanel::draw(EditorApp& app) {
     if (!visible) return;
     if (ImGui::Begin(title_.c_str(), &visible)) {
-        // Globális (üres terület) kontextus-menü — csak `Create Empty`.
-        // A `Save as Prefab` a per-node menüben szerepel (egyértelmű target).
+        // Global (empty area) context menu — only `Create Empty`.
+        // `Save as Prefab` is in the per-node menu (unambiguous target).
         if (ImGui::BeginPopupContextWindow("##hierctx",
                 ImGuiPopupFlags_MouseButtonRight |
                 ImGuiPopupFlags_NoOpenOverItems)) {
@@ -135,21 +135,21 @@ void HierarchyPanel::draw(EditorApp& app) {
             renderNode(app, root);
         }
 
-        // Delete-billentyű handler — csak amikor a Hierarchy panel a fókuszban
-        // van (ne fogja el a text-mező delete-ját, és ne aktiválódjon ha
-        // Inspector/Scene panelben dolgozunk).
+        // Delete-key handler — only when the Hierarchy panel is focused
+        // (don't steal the text-field delete, and don't activate when
+        // working in the Inspector/Scene panel).
         if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) &&
             !ImGui::GetIO().WantTextInput &&
             ImGui::IsKeyPressed(ImGuiKey_Delete, false)) {
-            // Másoljuk a selection-listát, mert a törlés közben mutáljuk.
+            // Copy the selection list because we mutate during deletion.
             std::vector<obj*> sel = app.selection().all();
             int deleted = 0;
             for (obj* n : sel) {
-                if (!n || n == root) continue;       // root nem törölhető
+                if (!n || n == root) continue;       // root cannot be deleted
                 obj* parent = obj_parent(n);
-                if (!parent) continue;               // már detach-elt
-                app.selection().remove(n);           // selection takarítás
-                obj_detach(n);                       // motor: kivesz a parent-ből
+                if (!parent) continue;               // already detached
+                app.selection().remove(n);           // selection cleanup
+                obj_detach(n);                       // motor: remove from parent
                 app.commands().execute(
                     std::make_unique<DeleteNodeCommand>(parent, n, "Delete"));
                 ++deleted;

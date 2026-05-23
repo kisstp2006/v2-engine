@@ -1,15 +1,15 @@
 #pragma once
 
-// AssetPreview — az Inspector "asset mode"-ja (Phase 3b+ bővítés).
-// Ha az `app.selection().selectedAsset()` non-empty és nincs primary node-
-// selection, az InspectorPanel ezt rajzolja a node-inspector helyett.
+// AssetPreview — the Inspector's "asset mode" (Phase 3b+ extension).
+// If `app.selection().selectedAsset()` is non-empty and there's no primary
+// node selection, the InspectorPanel draws this instead of the node-inspector.
 //
-// Tartalom:
-//   - File-info: path, size, mtime, typing-label (FileTypeRegistry-alapú).
-//   - Akciók: "Spawn into scene" (FileTypeHandler::action), "Open in IDE"
+// Contents:
+//   - File-info: path, size, mtime, typing-label (FileTypeRegistry-based).
+//   - Actions: "Spawn into scene" (FileTypeHandler::action), "Open in IDE"
 //     (IdeLauncher), "Reveal in folder" (ShellExecute "explore").
 //
-// Egyetlen public függvény, nem class — az Inspector hívja közvetlen.
+// A single public function, not a class — the Inspector calls it directly.
 
 #include <string>
 

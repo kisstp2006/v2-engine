@@ -1,4 +1,4 @@
-// STL ELŐSZÖR.
+// STL FIRST.
 #include <algorithm>
 #include <filesystem>
 #include <string>
@@ -12,14 +12,14 @@ namespace {
 
 namespace fs = std::filesystem;
 
-// Backslash → forward slash a string-ben.
+// Backslash → forward slash in the string.
 std::string normSlash(std::string s) {
     std::replace(s.begin(), s.end(), '\\', '/');
     return s;
 }
 
-// `weakly_canonical` — symlinkek-resolve nélkül lexically_normal forma.
-// Ha a fájl nem létezik, akkor is működik (a `canonical` exception-t dob).
+// `weakly_canonical` — lexically_normal form without resolving symlinks.
+// Works even if the file does not exist (`canonical` throws in that case).
 fs::path normalize(const fs::path& p) {
     std::error_code ec;
     fs::path n = fs::weakly_canonical(p, ec);

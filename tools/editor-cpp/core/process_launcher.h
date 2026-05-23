@@ -4,9 +4,9 @@
 
 namespace editor {
 
-// Új editor process indítása `--project <path>` argumentummal.
-// Windows-on CreateProcessA-t használ (nem system() / cmd /c), így nincs
-// shell-quoting hülyeség. Visszaad true-t ha az új process elindult.
+// Launch a new editor process with `--project <path>` argument.
+// On Windows uses CreateProcessA (not system() / cmd /c), so no
+// shell-quoting nonsense. Returns true if the new process started.
 bool launchEditorWithProject(const std::string& exe,
                              const std::string& projectPath);
 

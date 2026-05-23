@@ -1,4 +1,4 @@
-// STL ELŐSZÖR.
+// STL FIRST.
 #include <memory>
 #include <string>
 #include <utility>
@@ -48,8 +48,8 @@ AddNodeCommand::AddNodeCommand(obj* parent, obj* node, std::string name)
     : parent_(parent), node_(node), name_(std::move(name)) {}
 
 AddNodeCommand::~AddNodeCommand() {
-    // Ha undone-állapotban van (parent NULL = detach-elve), és a stack-ből
-    // kiesik → free, hogy ne szivárogjon a memória.
+    // If in an undone state (parent NULL = detached), and it falls off the
+    // stack → free, so memory doesn't leak.
     if (node_ && !obj_parent(node_)) {
         obj_free(node_);
     }
@@ -69,9 +69,8 @@ DeleteNodeCommand::DeleteNodeCommand(obj* parent, obj* node, std::string name)
     : parent_(parent), node_(node), name_(std::move(name)) {}
 
 DeleteNodeCommand::~DeleteNodeCommand() {
-    // Ha redo-állapotban van (parent NULL = detach-elve), és a stack-ből
-    // kiesik → free. Ha undo-állapotban van (vissza-attach-elve), a parent
-    // tartja → NE free-zd.
+    // If in a redo state (parent NULL = detached), and it falls off the stack
+    // → free. If in an undo state (re-attached), the parent holds it → do NOT free.
     if (node_ && !obj_parent(node_)) {
         obj_free(node_);
     }
@@ -99,7 +98,7 @@ void ReparentCommand::undo() {
     if (oldParent_) {
         obj_attach(oldParent_, node_);
     } else {
-        // Régebben root volt — detach-elünk (most a newParent alatt van).
+        // It used to be root — detach (now it's under newParent).
         obj_detach(node_);
     }
 }
@@ -153,7 +152,7 @@ std::vector<std::string> MultiObjectStateCommand::snapshotAll(
 
 void CommandStack::execute(std::unique_ptr<Command> cmd) {
     if (!cmd) return;
-    // Új mutáció törli a redo stack-et.
+    // A new mutation clears the redo stack.
     redo_.clear();
     undo_.push_back(std::move(cmd));
     while (undo_.size() > kMaxDepth) {

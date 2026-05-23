@@ -1,12 +1,12 @@
 #pragma once
 
 // FileTypeRegistry — extension → handler dispatch (Phase 3b).
-// A Project panel double-click handler-e ezt hívja meg: a path-hoz tartozó
-// FileTypeHandler::action callback-jét futtatja. Új fájl-típus = új
-// REGISTER_FILE_TYPE makró-bevitel, NINCS Project-panel-módosítás.
+// The Project panel's double-click handler calls this: it runs the
+// FileTypeHandler::action callback for the path. New file-type = new
+// REGISTER_FILE_TYPE macro entry, NO Project-panel modification.
 //
-// Auto-init pattern, mint a panel_registry.h: a regisztrációk static
-// initializer-ben futnak `main()` előtt.
+// Auto-init pattern, like panel_registry.h: registrations run in a static
+// initializer before `main()`.
 
 #include <functional>
 #include <string>
@@ -17,13 +17,13 @@ namespace editor {
 class EditorApp;
 
 struct FileTypeHandler {
-    // Lehetséges extension-ek lower-case-elt formában, ponttal kezdve.
-    // Compound extension is megengedett, pl. ".scene.json5" — longest-match
-    // nyer, így a ".scene.json5" előbb illeszkedik mint a ".json5".
+    // Possible extensions in lower-cased form, starting with a dot.
+    // Compound extensions are allowed, e.g. ".scene.json5" — longest-match
+    // wins, so ".scene.json5" matches before ".json5".
     std::vector<std::string>                              extensions;
-    // Emberi-olvasható label (Console-log + jövőbeni Import-szűrő).
+    // Human-readable label (Console-log + future Import-filter).
     std::string                                           label;
-    // A double-click akció — kapja a teljes path-ot.
+    // The double-click action — receives the full path.
     std::function<void(EditorApp&, const std::string&)>   action;
 };
 
@@ -31,12 +31,12 @@ class FileTypeRegistry {
 public:
     static FileTypeRegistry& instance();
 
-    // Új handler regisztráció. Mainstream-ben a REGISTER_FILE_TYPE makró
-    // hívja static initializer-ben.
+    // New handler registration. Normally called by the REGISTER_FILE_TYPE
+    // macro in a static initializer.
     void registerHandler(FileTypeHandler h);
 
-    // A path-hoz tartozó handler-t adja vissza. Longest-extension-match
-    // (a ".scene.json5" nyer a ".json5" fölött). nullptr ha nincs match.
+    // Returns the handler matching the path. Longest-extension-match
+    // (".scene.json5" wins over ".json5"). nullptr if no match.
     const FileTypeHandler* handlerFor(const std::string& path) const;
 
     const std::vector<FileTypeHandler>& all() const { return handlers_; }
@@ -45,14 +45,14 @@ private:
     std::vector<FileTypeHandler> handlers_;
 };
 
-// Static-init helper a REGISTER_FILE_TYPE makróhoz.
+// Static-init helper for the REGISTER_FILE_TYPE macro.
 struct FileTypeRegistrar {
     explicit FileTypeRegistrar(FileTypeHandler h);
 };
 
 }  // namespace editor
 
-// Új fájl-típus regisztrálása. Példa:
+// Register a new file-type. Example:
 //
 //   REGISTER_FILE_TYPE(mesh, {
 //       {".iqm", ".gltf", ".fbx"}, "Mesh",
@@ -61,7 +61,7 @@ struct FileTypeRegistrar {
 //       }
 //   })
 //
-// A `name` egy unique azonosító (csak a global-változó-nevet képezi belőle).
+// `name` is a unique identifier (only used to form the global-variable name).
 #define REGISTER_FILE_TYPE(name, ...)                                          \
     namespace {                                                                \
         const ::editor::FileTypeRegistrar _ft_##name##_reg{ __VA_ARGS__ };     \

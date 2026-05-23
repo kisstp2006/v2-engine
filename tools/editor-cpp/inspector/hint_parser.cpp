@@ -1,4 +1,4 @@
-// STL ELŐSZÖR.
+// STL FIRST.
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -13,8 +13,8 @@ bool tagPresent(const char* info, const char* tag) {
     return info && strstr(info, tag) != nullptr;
 }
 
-// Egyszerű key-prefix kereső: "[key" után olvas amig "]"-ig.
-// Pl. "[asset:model]" → tag="[asset:", out_val="model".
+// Simple key-prefix search: reads after "[key" until "]".
+// E.g. "[asset:model]" → tag="[asset:", out_val="model".
 bool extractTag(const char* info, const char* prefix, std::string& out_val) {
     if (!info) return false;
     const char* p = strstr(info, prefix);

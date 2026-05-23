@@ -1,4 +1,4 @@
-// STL ELŐSZÖR.
+// STL FIRST.
 #include <cstring>
 #include <filesystem>
 #include <fstream>

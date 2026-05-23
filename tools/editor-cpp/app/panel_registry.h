@@ -8,14 +8,14 @@ namespace editor {
 
 class Panel;
 
-// Egy regisztrált panel leírója — sorrend + factory.
+// Descriptor of a registered panel — order + factory.
 struct PanelDescriptor {
     int order;
     std::function<std::unique_ptr<Panel>()> factory;
 };
 
-// Statikus panel registry. A panel `.cpp` fájlok a REGISTER_PANEL makróval
-// regisztrálják magukat — még `main()` előtt, static initializer-ben.
+// Static panel registry. Panel `.cpp` files register themselves with the
+// REGISTER_PANEL macro — before `main()`, in a static initializer.
 class PanelRegistry {
 public:
     static void add(PanelDescriptor d);
@@ -24,13 +24,13 @@ public:
 
 }  // namespace editor
 
-// Új panel hozzáadása: a panel TYPE class-od `.cpp` fájljának végén,
-// `namespace editor { ... }` blokkon BELÜL:
+// Adding a new panel: at the end of your panel TYPE class's `.cpp` file,
+// INSIDE the `namespace editor { ... }` block:
 //
 //     REGISTER_PANEL(HierarchyPanel, 200)
 //
-// ORDER = a panel megjelenési sorrendje (kisebb = előbb). A registry
-// stabil-sortolja az add-ok után.
+// ORDER = the panel's display order (smaller = earlier). The registry
+// stable-sorts after the adds.
 #define REGISTER_PANEL(TYPE, ORDER)                                            \
     namespace {                                                                \
         const bool _##TYPE##_reg = (                                           \

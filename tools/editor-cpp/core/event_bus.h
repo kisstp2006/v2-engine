@@ -8,9 +8,9 @@
 
 namespace editor {
 
-// Egyszerű in-process event bus.
-// on("foo", h) → minden emit("foo", data) hív minden feliratkozó h-t.
-// A typing laza (std::any) — a feliratkozók egyezzenek meg az adattípuson.
+// Simple in-process event bus.
+// on("foo", h) → every emit("foo", data) calls every subscribed h.
+// Typing is loose (std::any) — subscribers must agree on the data type.
 class EventBus {
 public:
     using Handler = std::function<void(const std::any&)>;

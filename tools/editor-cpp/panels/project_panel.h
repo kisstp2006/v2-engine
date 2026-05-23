@@ -12,8 +12,8 @@ public:
     void draw(EditorApp& app) override;
 
 private:
-    // Aktuális mappa (abszolút path). Üres = még nincs inicializálva (első
-    // draw-ban `projectPath_/assets`-re állítjuk be).
+    // Current folder (absolute path). Empty = not yet initialized (set to
+    // `projectPath_/assets` on the first draw).
     std::string current_dir_;
 };
 

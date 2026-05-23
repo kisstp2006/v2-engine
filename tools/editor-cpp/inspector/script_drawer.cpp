@@ -1,7 +1,7 @@
-// STL ELŐSZÖR (motor `obj`/`is` macro-clash).
-// A core/ide_launcher.h (és benne az ide_helper.hpp) is itt jön be,
-// MIELŐTT az engine.h beolvasná az `ifdef_*` macrókat, amik a `<vector>`
-// és `<filesystem>` belsejét megrontanák.
+// STL FIRST (engine `obj`/`is` macro-clash).
+// core/ide_launcher.h (and ide_helper.hpp inside it) also comes in here,
+// BEFORE engine.h reads the `ifdef_*` macros, which would corrupt the
+// internals of `<vector>` and `<filesystem>`.
 #include <memory>
 #include <string>
 #include <vector>
@@ -91,7 +91,7 @@ void ScriptDrawer::draw(obj* o) {
     if (!hasPath) ImGui::EndDisabled();
 }
 
-// Static-init regisztráció (mint a panel_registry pattern).
+// Static-init registration (like the panel_registry pattern).
 namespace {
 struct ScriptDrawerRegistrar {
     ScriptDrawerRegistrar() {

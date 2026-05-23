@@ -1,78 +1,80 @@
-# v2 — game engine + Unity-style editor
+# v2 — game engine + scene editor
 
-Egy C/C++ alapú, lightweight 3D + 2D game engine, és egy Dear ImGui alapú,
-Unity-stílusú editor.
+A lightweight C/C++ based 3D + 2D game engine, plus a Dear ImGui based
+scene editor (Hierarchy / Inspector / Project / Scene / Game / Console /
+Build panels).
 
-## Komponensek
+## Components
 
-| Mappa | Mit ad | License |
+| Folder | What it provides | License |
 |---|---|---|
-| `code/` | A motor magja (render, audio, input, scene-graph, LuaJIT FFI, reflection) | **Apache 2.0** |
-| `ext/` | Backend pluginek (SDL3, OpenAL, ENet, ImGui-glue, FFmpeg-audio, stb.) | **Apache 2.0** (lásd egyes alkönyvtárakat) |
-| `demos/` | Példa-játékok és use-case-ek a motor API-jára | **Apache 2.0** |
-| `tools/editor-cpp/` | Unity-stílusú scene-editor (Hierarchy/Inspector/Project/Scene/Game/Console/Build panelekkel) | **GPL-3.0-or-later** |
+| `code/` | The engine core (render, audio, input, scene-graph, LuaJIT FFI, reflection) | **Apache 2.0** |
+| `ext/` | Backend plugins (SDL3, OpenAL, ENet, ImGui-glue, FFmpeg-audio, etc.) | **Apache 2.0** (see individual subdirectories) |
+| `demos/` | Sample games and use-cases for the engine API | **Apache 2.0** |
+| `tools/editor-cpp/` | Scene editor (Hierarchy / Inspector / Project / Scene / Game / Console / Build panels) | **GPL-3.0-or-later** |
 
 ## Build
 
 ```bat
-:: Motor + hello.exe (a fő engine binary):
+:: Engine + hello.exe (the main engine binary):
 MAKE.bat
 
 :: Editor (editor-cpp.exe):
 tools\editor-cpp\BUILD.bat
 ```
 
-Mind kettő MSVC `cl.exe`-t használ (Visual Studio 2022 Community ajánlott).
-A `BUILD.bat` rekurzívan auto-discover-eli a `tools/editor-cpp/` alatti
-`.c` és `.cpp` fájlokat — új modul hozzáadása nem igényel build-config-
-módosítást.
+Both use MSVC `cl.exe` (Visual Studio 2022 Community recommended).
+`BUILD.bat` recursively auto-discovers the `.c` and `.cpp` files under
+`tools/editor-cpp/` — adding a new module does not require changing the
+build config.
 
-## Editor — gyors túra
+## Editor — quick tour
 
-- **Hierarchy panel** — scene-tree, drag-drop reparenting, Delete-key törlés
-- **Inspector** — reflection-vezérelt mező-edit (`STRUCT()` macros + hint-string-ek)
-- **Project panel** — `assets/` mappa-böngésző, Import gomb, double-click spawn, asset-preview
+- **Hierarchy panel** — scene tree, drag-drop reparenting, Delete-key removal
+- **Inspector** — reflection-driven field-edit (`STRUCT()` macros + hint strings)
+- **Project panel** — `assets/` folder browser, Import button, double-click spawn, asset-preview
 - **Scene + Scene 2D + Game panel** — 3D viewport, 2D viewport, Play-mode
 - **Build panel** — Cook + zip + AssetValidator progress (threaded)
 - **Toolbar** — Play / Pause / Stop, gizmo-mode switcher
 
-Komponens-típusok: Transform, MeshRenderer, SpriteRenderer, TilemapRef,
+Component types: Transform, MeshRenderer, SpriteRenderer, TilemapRef,
 LightRef (DIR/POINT/SPOT + shadows), CameraRef, AudioSource (spatial),
 Script (Lua, hot-reload).
 
 ## Lua scripting
 
-- Minden Script-komponens egy izolált LuaJIT VM-et kap (`script_init_env`)
-- Az `engine.ffi` (~21k sor cdef) a teljes motor API-t exportálja `C.*`-on
-- A `node.*` helper-modul (`tools/editor-cpp/runtime/script_node_api.h`)
-  shortcut-okat ad: `node.pos(o)`, `node.rot(o)`, `node.parent(o)`,
-  `node.is_mesh(o)`, stb.
-- A `.luarc/engine.d.lua` EmmyLua-stub auto-generálva (Tools menü) → VSCode
-  + JetBrains EmmyLua IntelliSense + hover-tooltip a `C.*` API-ra
-- Hot-reload mtime-poll-lal — fájl-mentés azonnal újratölti a Play-mode VM-et
+- Every Script component gets an isolated LuaJIT VM (`script_init_env`)
+- The `engine.ffi` (~21k lines of cdef) exposes the full engine API on `C.*`
+- The `node.*` helper module (`tools/editor-cpp/runtime/script_node_api.h`)
+  provides shortcuts: `node.pos(o)`, `node.rot(o)`, `node.parent(o)`,
+  `node.is_mesh(o)`, etc.
+- The `.luarc/engine.d.lua` EmmyLua stub is auto-generated (Tools menu) →
+  VSCode + JetBrains EmmyLua IntelliSense + hover-tooltip for the `C.*` API
+- Hot-reload via mtime-poll — a file save immediately re-loads the Play-mode VM
 
-## Asset-pipeline
+## Asset pipeline
 
-- Recipe-rendszer (`code/sys/sys_cook2.h`) — external command-converterek
-  (pl. `ffmpeg.EXE` mp3 → ogg)
-- Cook + cook.zip build (Tools menü, threaded)
-- AssetValidator — pre-cook check a scene-asset-path-okra (létezés,
-  extension-match, projekt-relatív path)
+- Recipe system (`code/sys/sys_cook2.h`) — external command converters
+  (e.g. `ffmpeg.EXE` mp3 → ogg)
+- Cook + cook.zip build (Tools menu, threaded)
+- AssetValidator — pre-cook check on scene asset paths (existence,
+  extension match, project-relative path)
 
-## Modellformátum-támogatás
+## Model format support
 
-- **IQM** (Inter-Quake Model) — natív, animation + skinning
-- **glTF / GLB** (PBR materials, statikus mesh) — via cgltf (`code/3rd/3rd_cgltf.h`)
+- **IQM** (Inter-Quake Model) — native, animation + skinning
+- **glTF / GLB** (PBR materials, static mesh) — via cgltf (`code/3rd/3rd_cgltf.h`)
 
-A felhasználói projekt-mappa-strukturat a `New Project` wizard hozza
-létre (`project.json5` + `assets/{models,scenes,scripts,prefabs}/`).
+The user-project folder structure is created by the `New Project` wizard
+(`project.json5` + `assets/{models,scenes,scripts,prefabs}/`).
 
 ## License notes
 
-- A **motor** (`code/`, `ext/`, `demos/`) **Apache License 2.0** alatt —
-  szabadon felhasználható closed-source projektekben is, beleértve a
-  patent-grant védelmet (a "profi open-source" preferált license).
-- Az **editor** (`tools/editor-cpp/`) **GPL-3.0-or-later** alatt — a forkok
-  és származékos művek kötelesek nyitott-forráskódúak maradni. A copyright-
-  tulajdonos (TIGames) fenntartja a jogot, hogy más license-szel adja ki
-  (pl. kereskedelmi / closed-source).
+- The **engine** (`code/`, `ext/`, `demos/`) is licensed under the
+  **Apache License 2.0** — freely usable in closed-source projects too,
+  including patent-grant protection (the "professional open-source"
+  preferred license).
+- The **editor** (`tools/editor-cpp/`) is licensed under **GPL-3.0-or-later** —
+  forks and derivative works must remain open-source. The copyright holder
+  (TIGames) reserves the right to release it under other licenses (e.g.
+  commercial / closed-source).

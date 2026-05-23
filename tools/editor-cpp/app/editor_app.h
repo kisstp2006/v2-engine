@@ -26,57 +26,57 @@ public:
     EditorApp(const EditorApp&) = delete;
     EditorApp& operator=(const EditorApp&) = delete;
 
-    // Belép a fő render-loop-ba; ESC-ig vagy `quit()`-ig.
+    // Enter the main render-loop; until ESC or `quit()`.
     void run();
 
     void quit() { quit_ = true; }
     void resetDockLayout() { needResetLayout_ = true; }
 
-    // Visszaad egy érvényes scene-root-ot. Ha `scene_.root() == nullptr`
-    // (pl. korrupt scene-fájl Open után), létrejön egy default "Scene" root
-    // és Console-warningot ad. Minden createXxx ezt használja parent-NULL
-    // esetén — silent fail helyett.
+    // Returns a valid scene-root. If `scene_.root() == nullptr`
+    // (e.g. corrupt scene-file after Open), creates a default "Scene" root
+    // and emits a Console-warning. Every createXxx uses this when parent
+    // is NULL — instead of silent fail.
     obj* ensureRoot();
 
-    // Új üres node (Transform) a parent alá (vagy a scene root alá).
-    // Selection-re is set-eli az új node-ot.
+    // New empty node (Transform) under parent (or under the scene root).
+    // Also sets the new node on Selection.
     obj* createEmpty(obj* parent = nullptr);
 
-    // Új Mesh node (MeshRenderer). model_path lehet üres/null.
+    // New Mesh node (MeshRenderer). model_path may be empty/null.
     obj* createMesh(const char* model_path = "", obj* parent = nullptr);
 
-    // Új Sprite node (SpriteRenderer). texture_path lehet üres/null.
+    // New Sprite node (SpriteRenderer). texture_path may be empty/null.
     obj* createSprite(const char* texture_path = "", obj* parent = nullptr);
 
-    // Új Tilemap node (TilemapRef). tmx_path lehet üres/null.
+    // New Tilemap node (TilemapRef). tmx_path may be empty/null.
     obj* createTilemap(const char* tmx_path = "", obj* parent = nullptr);
 
-    // Új Light node. type: 0=DIRECTIONAL, 1=POINT, 2=SPOT.
+    // New Light node. type: 0=DIRECTIONAL, 1=POINT, 2=SPOT.
     obj* createLight(int type, obj* parent = nullptr);
 
-    // Új CameraRef node (alapból is_active=true).
+    // New CameraRef node (is_active=true by default).
     obj* createCamera(obj* parent = nullptr);
 
-    // Új AudioSource node. clip_path lehet üres/null.
+    // New AudioSource node. clip_path may be empty/null.
     obj* createAudioSource(const char* clip_path = "", obj* parent = nullptr);
 
-    // Prefab — egy subtree-t fájlba ment (.prefab.json5).
+    // Prefab — save a subtree to a file (.prefab.json5).
     void saveSelectedAsPrefab();
 
-    // Prefab — .prefab.json5 betöltése, a scene root alá köti.
+    // Prefab — load .prefab.json5, attach under the scene root.
     void spawnPrefab(const char* path);
 
-    // Új Script node. script_path lehet üres/null.
+    // New Script node. script_path may be empty/null.
     obj* createScript(const char* script_path = "", obj* parent = nullptr);
 
     // Save / Open scene (JSON5).
-    void saveScene();       // Ctrl+S — lastSavedPath_-re ment vagy saveSceneAs.
+    void saveScene();       // Ctrl+S — save to lastSavedPath_ or saveSceneAs.
     void saveSceneAs();
     void openScene();                              // pickFile + openScene(path)
-    void openScene(const std::string& path);       // közvetlen path-megnyitás
+    void openScene(const std::string& path);       // direct path open
 
-    // Window-title fresh frissítés ("<scene>* — editor-cpp [<project>]").
-    // A motor app_swap-pje SDL_SetWindowTitle-lel applikálja.
+    // Window-title fresh update ("<scene>* — editor-cpp [<project>]").
+    // The engine's app_swap applies it via SDL_SetWindowTitle.
     void refreshWindowTitle();
 
     EventBus&         bus()       { return bus_; }
@@ -91,18 +91,18 @@ public:
     const std::string& projectPath() const { return projectPath_; }
     const std::vector<std::unique_ptr<Panel>>& panels() const { return panels_; }
 
-    // Phase 5a — cook-vezérlés (Tools menü és BuildPanel hívja).
+    // Phase 5a — cook-control (called by Tools menu and BuildPanel).
     void startCookInPlaceAllAssets();
     void startBuildCookZip();
     void requestCookCancel();
 
-    // Phase 5c — asset-validation (Tools menü "Validate Assets"). Console-
-    // ba ír összefoglalót és per-issue részleteket. Pre-cook automatikus
-    // hívás belülről történik a start* metódusokban.
+    // Phase 5c — asset-validation (Tools menu "Validate Assets"). Writes
+    // a summary and per-issue details to Console. Pre-cook automatic
+    // calls happen internally inside the start* methods.
     void runAssetValidation();
 
-    // Phase 6a — engine.ffi → engine.d.lua (EmmyLua stub) generálás +
-    // .luarc.json + .vscode/settings.json. `force=false` → csak ha az
+    // Phase 6a — engine.ffi → engine.d.lua (EmmyLua stub) generation +
+    // .luarc.json + .vscode/settings.json. `force=false` → only if
     // engine.ffi mtime > stub mtime (mtime-cache).
     void generateLuaStubs(bool force);
 
@@ -114,27 +114,27 @@ private:
     void drawMenubar();
     void drawCookValidationPopup();   // Phase 5c
 
-    // Phase 4a — projekt-relatív path-konvertáció. Ha az `inputPath` abszolút
-    // és projekt-en belül van → "assets/.../foo.iqm" relatívra. Ha üres vagy
-    // projekt-en kívül → változatlanul (kívül-esetben Console warning).
+    // Phase 4a — project-relative path conversion. If `inputPath` is absolute
+    // and inside the project → "assets/.../foo.iqm" relative. If empty or
+    // outside the project → unchanged (outside-case Console warning).
     std::string makeRelativeIfInside(const char* inputPath);
 
-    // Phase 5c — pre-cook validation prompt state. Ha vannak Error-szintű
-    // issue-k a validation után, a tényleges cook-ot defer-eljük egy modal-
-    // popup eldöntéséig (Continue / Cancel).
+    // Phase 5c — pre-cook validation prompt state. If there are Error-level
+    // issues after validation, defer the actual cook until a modal-popup
+    // decision (Continue / Cancel).
     enum class PendingCookKind { None, InPlace, BuildZip };
     struct PendingCookPrompt {
         PendingCookKind          kind = PendingCookKind::None;
         std::vector<std::string> paths;
         std::string              zipPath;
         std::vector<AssetIssue>  issues;
-        bool                     openRequested = false;  // 1 frame-re true
+        bool                     openRequested = false;  // true for 1 frame
     };
     PendingCookPrompt cookPrompt_;
 
     std::string      projectPath_;
-    std::string      lastSavedPath_;     // Save Scene utáni path (Ctrl+S target)
-    bool             isDirty_ = false;   // window-title `*` indikátor
+    std::string      lastSavedPath_;     // path after Save Scene (Ctrl+S target)
+    bool             isDirty_ = false;   // window-title `*` indicator
     EventBus         bus_;
     MainThreadQueue  mainQueue_;
     SceneService     scene_;
@@ -144,7 +144,7 @@ private:
     std::unique_ptr<ScriptHost>  scriptHost_;
     std::unique_ptr<CookRunner>  cookRunner_;
     /* IMGUIZMO_OPERATION: 7 = TRANSLATE, 120 = ROTATE, 896 = SCALE_UNI
-       (full-axis variánsok). Kezdetben TRANSLATE. */
+       (full-axis variants). Initially TRANSLATE. */
     int              gizmoOp_ = 7;
     std::vector<std::unique_ptr<Panel>> panels_;
     ConsolePanel* console_ = nullptr;     // non-owning, into panels_

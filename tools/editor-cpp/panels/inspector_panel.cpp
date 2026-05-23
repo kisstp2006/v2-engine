@@ -14,8 +14,8 @@ void InspectorPanel::draw(EditorApp& app) {
     if (!visible) return;
     if (ImGui::Begin(title_.c_str(), &visible)) {
         obj* o = app.selection().primary();
-        // Asset-preview mód: ha nincs primary node DE van selected asset
-        // (Project panelből 1-click), az Inspector az asset-info-t mutatja.
+        // Asset-preview mode: if there is no primary node BUT there is a selected asset
+        // (1-click from the Project panel), the Inspector shows the asset-info.
         const std::string& assetPath = app.selection().selectedAsset();
         if (!o && !assetPath.empty()) {
             drawAssetPreview(app, assetPath);
@@ -27,7 +27,7 @@ void InspectorPanel::draw(EditorApp& app) {
             const char*  name = obj_name(o);
             const char*  type = obj_type(o);
 
-            // Header: ha multi-select → "N selected", egyébként név + típus.
+            // Header: if multi-select → "N selected", otherwise name + type.
             if (cnt > 1) {
                 ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.4f, 1),
                                    "%zu Objects selected (editing primary, "
@@ -43,17 +43,17 @@ void InspectorPanel::draw(EditorApp& app) {
             ImGui::Separator();
             ImGui::Dummy(ImVec2(0, 4));
 
-            // Phase 4a — registry projekt-kontextusa (drop-target relativizál).
+            // Phase 4a — registry project context (drop-target relativizes paths).
             InspectorRegistry::instance().setProjectPath(app.projectPath());
-            // Phase 6b — EditorApp* kontextus a custom drawer-eknek.
+            // Phase 6b — EditorApp* context for custom drawers.
             InspectorRegistry::instance().setApp(&app);
 
-            // Multi-aware rendering: csak homogén selection esetén tényleges
-            // multi-edit; egyébként primary-on rajzol.
+            // Multi-aware rendering: actual multi-edit only on homogeneous selection;
+            // otherwise draws on primary.
             InspectorRegistry::instance().drawComponentsMulti(all);
 
-            // Edit transaction edge-detection. Multi-target esetén minden
-            // node-ra snapshot-ol + MultiObjectStateCommand-pal undozható.
+            // Edit transaction edge-detection. For multi-target, snapshots
+            // every node + undoable via MultiObjectStateCommand.
             const bool isEditing =
                 ImGui::IsAnyItemActive() && ImGui::IsWindowFocused();
             if (isEditing && !wasEditing_) {

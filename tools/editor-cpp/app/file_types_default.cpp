@@ -1,6 +1,6 @@
-// Default fájl-típus regisztrációk (Phase 3b).
-// Új típus hozzáadása: csak egy új REGISTER_FILE_TYPE blokk. Új fájl is OK
-// — a static initializer auto-regisztrál.
+// Default file-type registrations (Phase 3b).
+// Adding a new type: just a new REGISTER_FILE_TYPE block. A new file is also OK
+// — the static initializer auto-registers.
 
 #include <string>
 
@@ -36,9 +36,9 @@ REGISTER_FILE_TYPE(sprite, {
 
 REGISTER_FILE_TYPE(script, {
     {".lua"}, "Script",
-    // Csak spawn — az IDE-megnyitás az asset-preview / Script-Inspector
-    // explicit "Open in IDE" gombján keresztül történik (Phase 6c). Így a
-    // dupla-akció nem csap rá a felhasználóra szándék nélkül.
+    // Spawn only — IDE-opening happens via the asset-preview / Script-Inspector
+    // explicit "Open in IDE" button (Phase 6c). This way the double-action
+    // does not surprise the user without intent.
     [](EditorApp& app, const std::string& p) {
         app.createScript(p.c_str());
     }

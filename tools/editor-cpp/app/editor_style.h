@@ -1,9 +1,9 @@
 #pragma once
 
-// editor_style — Unity-dark + cold blue accent + compact + sharp corners.
+// editor_style — dark theme + cold blue accent + compact + sharp corners.
 //
-// Hívd MEG egyszer `app_create()` UTÁN — felülírja a motor alapértelmezett
-// `igCherryTheme`-jét és a `ImGuiStyle` minden vonatkozó mezőjét.
+// Call once AFTER `app_create()` — overrides the engine's default
+// `igCherryTheme` and every relevant field of `ImGuiStyle`.
 
 namespace editor {
 

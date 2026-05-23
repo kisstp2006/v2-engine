@@ -1,6 +1,6 @@
-// LightRef — fény-komponens. A Scene render-walk minden frame-ben gyűjti a
-// LightRef-eket, light_t-vé alakítja, és `model_light()`-szel beadja minden
-// MeshRenderer render-hívásába.
+// LightRef — light-component. The Scene render-walk collects LightRef nodes
+// every frame, converts each to a light_t, and passes them with `model_light()`
+// into every MeshRenderer render-call.
 
 #include "engine.h"
 #include "components_api.h"
@@ -15,7 +15,7 @@ typedef struct LightRef {
     float    power;
     float    inner_cone;    // SPOT only
     float    outer_cone;    // SPOT only
-    int      cast_shadows;  // 0/1 (motor p2s nem tud bool-t)
+    int      cast_shadows;  // 0/1 (engine p2s has no bool)
 } LightRef;
 
 OBJTYPEDEF(LightRef, 68);
@@ -41,8 +41,8 @@ obj* editor_obj_new_light_ref(obj* parent, const char* name, int type) {
     l->power = 250.0f;
     l->inner_cone = 0.85f;
     l->outer_cone = 0.9f;
-    l->cast_shadows = 0;       // default OFF — bekapcs az Inspectorban kísérlettel
-    /* Default dir minden típusra (a directional kapja használatba). */
+    l->cast_shadows = 0;       // default OFF — toggle on in the Inspector to experiment
+    /* Default dir for every type (the directional one actually uses it). */
     l->dir.x =  1.0f;
     l->dir.y = -1.0f;
     l->dir.z = -1.0f;
@@ -63,8 +63,8 @@ void editor_light_ref_to_light_t(const obj* o, void* out_light) {
     dst->power       = lr->power;
     dst->innerCone   = lr->inner_cone;
     dst->outerCone   = lr->outer_cone;
-    // A motor shadowmap-pipeline-ja crashel néhány light-konfigon, ezért a
-    // cast_shadows-t a render-felé HARDCODED false-ként továbbítjuk. A
-    // komponens-mezője (Inspector-checkbox) megmarad jövőbeli wireup-hoz.
+    // The engine shadowmap pipeline crashes on some light-configs, so we
+    // forward cast_shadows to the renderer as a HARDCODED false. The
+    // component-field (Inspector-checkbox) remains for future wireup.
     dst->cast_shadows = false;
 }

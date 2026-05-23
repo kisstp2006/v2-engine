@@ -1,7 +1,7 @@
-// STL ELŐSZÖR.
+// STL FIRST.
 #include <string>
 
-// Windows-specifikus mappa-picker (IFileOpenDialog).
+// Windows-specific folder picker (IFileOpenDialog).
 #include <windows.h>
 #include <shobjidl.h>
 

@@ -1,13 +1,14 @@
 #pragma once
 
-// Wrapper-ek a motor `obj_new(...)` macro köré.
+// Wrappers around the engine's `obj_new(...)` macro.
 //
-// Miért kell: a motor `OBJ_CTOR` macro C99 compound literal-t használ
-// (`(TYPE){ ... }`), amit MSVC C++ NEM támogat. A wrappereket C99 .c
-// fájlban hívjuk, és a C++ oldal `extern "C"`-en át használja.
+// Why: the engine's `OBJ_CTOR` macro uses a C99 compound literal
+// (`(TYPE){ ... }`), which MSVC C++ does NOT support. The wrappers are
+// called from a C99 .c file, and the C++ side uses them via `extern "C"`.
 //
-// Az `API` macro = __declspec(dllexport) MSVC-n → a LuaJIT FFI a process-
-// szimbólumokból resolválja ezeket (Script-komponens hot-bindingjéhez).
+// The `API` macro = __declspec(dllexport) on MSVC → the LuaJIT FFI
+// resolves these from the process symbols (for the Script-component
+// hot-binding).
 
 #include "engine.h"
 #ifdef obj
@@ -20,19 +21,19 @@ extern "C" {
 
 API struct obj* editor_obj_new_scene(const char* name);
 
-// editor_obj_pos_addr deklaráció a components/components_api.h-ban van.
+// editor_obj_pos_addr declaration lives in components/components_api.h.
 API int          editor_obj_child_count(const struct obj* parent);
 API struct obj*  editor_obj_child_at   (const struct obj* parent, int i);
 
-// Komponens-osztály classifier — melyik viewport mutassa a gizmot:
+// Component-class classifier — which viewport should show the gizmo:
 //   - 2D: SpriteRenderer, TilemapRef
-//   - 3D: Transform, MeshRenderer (és minden további pos-pointerrel ami nem 2D)
+//   - 3D: Transform, MeshRenderer (and anything else with a pos-pointer that is not 2D)
 API int          editor_obj_is_2d_component(const struct obj* o);
 API int          editor_obj_is_3d_component(const struct obj* o);
 
-// Cycle-detection a reparent-hez. true ha `potentialAncestor` a `node`
-// szülő-lánca mentén megtalálható (vagy önmaga). Ha node-ot
-// potentialAncestor alá ejtenénk, ciklus keletkezne → tilos.
+// Cycle-detection for reparent. True if `potentialAncestor` is found along
+// `node`'s parent chain (or is the node itself). If we dropped `node`
+// under `potentialAncestor` a cycle would form → forbidden.
 API int          editor_obj_is_ancestor(const struct obj* potentialAncestor,
                                         const struct obj* node);
 

@@ -1,10 +1,10 @@
 #pragma once
 
 // MainThreadQueue — background-thread → main-thread callback executor
-// (Phase 5a). A worker-thread `enqueue(fn)`-nel adja fel a UI-érintő
-// műveleteket; a main-thread minden frame-ben `drainOnMainThread()`-tel
-// futtatja őket sorban. Így nem kell ImGui-t / EventBus-t direkt thread-
-// safe-vé tenni — minden mutáció a main-thread-en történik.
+// (Phase 5a). The worker-thread posts UI-touching operations with
+// `enqueue(fn)`; the main-thread runs them in order each frame via
+// `drainOnMainThread()`. This way we don't have to make ImGui / EventBus
+// directly thread-safe — every mutation happens on the main-thread.
 
 #include <functional>
 #include <mutex>
@@ -14,13 +14,13 @@ namespace editor {
 
 class MainThreadQueue {
 public:
-    // Background-thread-ből hívható. A `fn` a következő drain-kor fut.
+    // Callable from background-thread. `fn` runs at the next drain.
     void enqueue(std::function<void()> fn);
 
-    // Main-thread-en hívandó (EditorApp::drawFrame elején). Az összes
-    // pending callback-et lefuttatja sorrendben. Új enqueue() közben is
-    // biztonságos — a snapshot-listát mutex alatt vesszük ki, és üres
-    // queue-n hívunk a callback-eket (más szálak közben tovább adhatnak fel).
+    // To be called on the main-thread (at the start of EditorApp::drawFrame).
+    // Runs every pending callback in order. Safe while new enqueue() calls
+    // happen — the snapshot-list is taken under mutex, and callbacks are
+    // invoked on an empty queue (other threads can keep posting in the meantime).
     void drainOnMainThread();
 
 private:

@@ -7,23 +7,23 @@
 
 #include "engine.h"
 #ifdef obj
-#undef obj   // motor function-like macro vs. typedef ütközés
+#undef obj   // engine function-like macro vs. typedef collision
 #endif
 
 namespace editor {
 
 class EditorApp;
 
-// Per-type Inspector drawer interface. M16-ban kibővül hint-aware
-// rajzolással (asset-picker, color, clamp) és multi-select supporttal.
+// Per-type Inspector drawer interface. Extended in M16 with hint-aware
+// drawing (asset-picker, color, clamp) and multi-select support.
 class IInspectorDrawer {
 public:
     virtual ~IInspectorDrawer() = default;
     virtual void draw(obj* o) = 0;
 };
 
-// Globális drawer registry. Dispatch: ha van regisztrált drawer a node
-// típusára, azt hívjuk; egyébként a default `ui_obj` reflection-render.
+// Global drawer registry. Dispatch: if a drawer is registered for the
+// node's type, call it; otherwise the default `ui_obj` reflection-render.
 class InspectorRegistry {
 public:
     static InspectorRegistry& instance();
@@ -31,28 +31,29 @@ public:
     void registerDrawer(const char* typeName,
                         std::unique_ptr<IInspectorDrawer> drawer);
 
-    // Egy konkrét node komponens-tartalmának kirajzolása.
+    // Draw the component contents of a specific node.
     void drawComponents(obj* o);
 
-    // Multi-edit (Phase 2c). A primary (targets[0]) widget-ein keresztül
-    // szerkeszthető. Edit-frame-ben a primary mező-értékét memcpy-zi/STRDUP-pal
-    // propagálja a többi targets[1..n]-re. Csak HOMOGÉN selection (mind ugyanaz
-    // a obj_type) — heterogén esetben a hívó single-mode-ra esik vissza.
+    // Multi-edit (Phase 2c). Editable through the widgets of the primary
+    // (targets[0]). On an edit-frame, the primary's field value is propagated
+    // (via memcpy/STRDUP) to the other targets[1..n]. Only HOMOGENEOUS
+    // selection (all the same obj_type) — in heterogeneous cases the caller
+    // falls back to single-mode.
     void drawComponentsMulti(const std::vector<obj*>& targets);
 
-    // Phase 6b — public wrapper a default reflection-render köré (a custom
-    // drawer-ek is hívhatják, hogy az "alap mezők" után tegyenek a saját
-    // UI-jukat).
+    // Phase 6b — public wrapper around the default reflection-render (custom
+    // drawers can also call it, so they can put their own UI after the
+    // "default fields").
     void drawDefaults(const std::vector<obj*>& targets);
 
-    // Phase 4a — projekt-kontextus a drop-target/picker relativizálásához.
-    // Az InspectorPanel set-eli minden draw elején `app.projectPath()`-ra.
+    // Phase 4a — project context for relativizing the drop-target/picker.
+    // The InspectorPanel sets this at the start of every draw to `app.projectPath()`.
     void setProjectPath(const std::string& p) { projectPath_ = p; }
     const std::string& projectPath() const    { return projectPath_; }
 
-    // Phase 6b — EditorApp* kontextus a drawer-eknek (pl. ScriptDrawer-nek
-    // app.scriptHost() és app.bus()). Az InspectorPanel set-eli minden frame
-    // elején. Non-owning pointer.
+    // Phase 6b — EditorApp* context for the drawers (e.g. ScriptDrawer needs
+    // app.scriptHost() and app.bus()). The InspectorPanel sets this at the
+    // start of every frame. Non-owning pointer.
     void       setApp(EditorApp* a) { app_ = a; }
     EditorApp* app() const          { return app_; }
 

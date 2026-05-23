@@ -16,8 +16,8 @@
 
 namespace editor {
 
-// 3D viewport panel. M3-ban: FBO + grid + statikus kamera.
-// M4: freefly kamera + MeshRenderer render. M5: translate gizmo.
+// 3D viewport panel. In M3: FBO + grid + static camera.
+// M4: freefly camera + MeshRenderer render. M5: translate gizmo.
 class ScenePanel : public Panel {
 public:
     ScenePanel();
@@ -32,7 +32,7 @@ private:
                        const std::vector<light_t>& lights);
     void renderMeshNode(obj* node, EditorApp& app,
                         const std::vector<light_t>& lights);
-    // Shadow-pass: a mesheket csak depth-be renderelni (semmilyen fény / shading).
+    // Shadow-pass: render meshes to depth only (no lighting / shading).
     void walkShadowPass(obj* node, EditorApp& app);
     void renderMeshShadowOnly(obj* node, EditorApp& app);
 
@@ -45,7 +45,7 @@ private:
     AssetMtimes                              modelMtimes_;
     FailedPathSet                            failedPaths_;
 
-    // Shadowmap (M12-bonus). Lazy init az első render-frame-en.
+    // Shadowmap (M12-bonus). Lazy init on the first render-frame.
     shadowmap_t sm_{};
     bool        sm_init_ = false;
 

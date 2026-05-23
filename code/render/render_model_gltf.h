@@ -1,22 +1,22 @@
 // render_model_gltf.h
-// GLTF / GLB betöltő — cgltf-alapú parser → iqm_t-szerű struct, hogy
-// a meglevő model_render/animate-pipeline változatlan maradjon.
+// GLTF / GLB loader — cgltf-based parser → iqm_t-shaped struct, so the
+// existing model_render/animate pipeline stays unchanged.
 //
 // Step 2: static mesh loader (geometry + checker placeholder material).
-// Step 3+: material/PBR + skinning + animations (későbbi step-ekben).
+// Step 3+: material/PBR + skinning + animations (later steps).
 //
-// Tervezett scope:
-//   - Vertex-formátum: a meglevő 68-byte iqm_vertex (position/texcoord/normal/
+// Planned scope:
+//   - Vertex format: the existing 68-byte iqm_vertex (position/texcoord/normal/
 //     tangent/blendindexes/blendweights/blendvertexindex/color/texcoord2).
-//   - Multi-mesh / multi-primitive GLTF — egy összevont VBO + IBO + per-mesh
-//     iqmmesh rekord (first_vertex/num_vertexes/first_triangle/num_triangles).
-//   - GLB (single-file binary) most működik; JSON-only .gltf (.bin external)
-//     a model_from_mem signature-bővítését igényli — későbbi step.
+//   - Multi-mesh / multi-primitive GLTF — one combined VBO + IBO + per-mesh
+//     iqmmesh record (first_vertex/num_vertexes/first_triangle/num_triangles).
+//   - GLB (single-file binary) works now; JSON-only .gltf (with external .bin)
+//     requires extending model_from_mem's signature — later step.
 
 #pragma once
 #if CODE
 
-// Egyetlen "checker" placeholder material (fallback ha nincs GLTF material).
+// Single "checker" placeholder material (fallback when GLTF has no material).
 static
 void model_load_textures_gltf_stub(iqm_t *q, model_t *m) {
     (void)q;
@@ -34,9 +34,9 @@ void model_load_textures_gltf_stub(iqm_t *q, model_t *m) {
 
 // ---- Step 3: GLTF material → material_t PBR-mapping ----
 
-// Replikálja a model_load_pbr 987-1000 sor default-init blokkját. A GLTF-
-// betöltő ezt manuálisan futtatja, mert `_loaded=true`-ra állítjuk a
-// material-t (különben a model_setshader felülírná a layer-jeinket).
+// Replicates the default-init block at lines 987-1000 of model_load_pbr. The
+// GLTF loader runs this manually because we set `_loaded=true` on the
+// material (otherwise model_setshader would overwrite our layers).
 static
 void gltf_init_material_defaults(material_t *mt) {
     mt->layer[MATERIAL_CHANNEL_NORMALS].map.color   = vec4(0,0,0,0);
@@ -54,9 +54,9 @@ void gltf_init_material_defaults(material_t *mt) {
     mt->base_reflectivity = vec3(0.04f, 0.04f, 0.04f);
 }
 
-// Embedded buffer-view-ből texture_t. JSON-only .gltf external image (uri)
-// jelenleg NEM támogatott — a model_from_mem nincs base_dir-rel. Data-uri
-// (data:image/png;base64,...) működik mert cgltf_load_buffers oldja meg.
+// texture_t from an embedded buffer-view. External JSON-only .gltf image (uri)
+// is currently NOT supported — model_from_mem has no base_dir. Data-uris
+// (data:image/png;base64,...) work because cgltf_load_buffers handles them.
 static
 texture_t gltf_load_image(cgltf_image *img, int flags) {
     if (!img) return texture_checker();
@@ -74,9 +74,9 @@ texture_t gltf_load_image(cgltf_image *img, int flags) {
     return texture_checker();
 }
 
-// MR-packed image szétpakolás: G-csatorna → roughness, B-csatorna → metallic.
-// Két R8-textúrát ad vissza (a meglévő shader-rel kompatibilis).
-// Ha decode fail-elt, mindkét output checker-t kap.
+// Unpack the MR-packed image: G channel → roughness, B channel → metallic.
+// Returns two R8 textures (compatible with the existing shader).
+// If decoding fails, both outputs become the checker texture.
 static
 void gltf_split_mr_image(cgltf_image *img,
                          texture_t *out_roughness, texture_t *out_metallic) {
@@ -110,10 +110,10 @@ void gltf_split_mr_image(cgltf_image *img,
     stbi_image_free(rgba);
 }
 
-// `cgltf_material` → `material_t` strukturált mapping.
+// Structured `cgltf_material` → `material_t` mapping.
 static
 void model_load_materials_gltf(cgltf_data *data, model_t *m) {
-    // Ha nincs material → fallback placeholder.
+    // If there is no material → fallback placeholder.
     if (data->materials_count == 0) {
         model_load_textures_gltf_stub(m->iqm, m);
         return;
@@ -205,41 +205,40 @@ void model_load_materials_gltf(cgltf_data *data, model_t *m) {
     }
 }
 
-// 4x4 column-major mátrix × vec3 (homogeneous w=1) — position-transform.
+// 4x4 column-major matrix × vec3 (homogeneous w=1) — position-transform.
 static inline void gltf_mul_pos(const float m[16], const float v[3], float out[3]) {
     out[0] = m[0]*v[0] + m[4]*v[1] + m[ 8]*v[2] + m[12];
     out[1] = m[1]*v[0] + m[5]*v[1] + m[ 9]*v[2] + m[13];
     out[2] = m[2]*v[0] + m[6]*v[1] + m[10]*v[2] + m[14];
 }
 
-// 3x3 sub-mátrix × vec3 (direction-transform, NO translation) — normalokra.
+// 3x3 sub-matrix × vec3 (direction-transform, NO translation) — for normals.
 static inline void gltf_mul_dir(const float m[16], const float v[3], float out[3]) {
     out[0] = m[0]*v[0] + m[4]*v[1] + m[ 8]*v[2];
     out[1] = m[1]*v[0] + m[5]*v[1] + m[ 9]*v[2];
     out[2] = m[2]*v[0] + m[6]*v[1] + m[10]*v[2];
 }
 
-// 3x3 sub-mátrix determináns. < 0 esetén a winding-et invertálni kell
-// (negative scale a node-on, pl. mirror-export).
+// 3x3 sub-matrix determinant. If < 0 the winding must be inverted
+// (negative scale on the node, e.g. mirror-export).
 static inline float gltf_mat3_det(const float m[16]) {
     return m[0]*(m[5]*m[10] - m[6]*m[9])
          - m[4]*(m[1]*m[10] - m[2]*m[9])
          + m[8]*(m[1]*m[6]  - m[2]*m[5]);
 }
 
-// cgltf_node-okat iteráljuk (NEM a meshes[]-t), így a node-szintű TRS és
-// hierarchikus parent-transform is beleszámol. cgltf_node_transform_world
-// adja a teljes world-mátrixot.
-// FIGYELEM: `q` paraméterben kapva, mert a model_from_mem `m.iqm = q` csak a
-// tail-blokkban (sikeres betöltés után) fut. A loader előtte hívódik.
+// We iterate cgltf_nodes (NOT meshes[]), so the node-level TRS and the
+// hierarchical parent-transform are also accounted for. cgltf_node_transform_world
+// gives the full world matrix.
+// NOTE: `q` is passed in, because model_from_mem's `m.iqm = q` runs only in
+// the tail block (after a successful load). The loader is called before that.
 static
 bool model_load_meshes_gltf(cgltf_data *data, iqm_t *q, model_t *m, int flags) {
     (void)flags;
 
-    // ---- 1) össz-vertex / össz-triangle / össz-primitive számolás --------
-    // Node-szintű iteráció: minden mesh-szel rendelkező node (instancing-ben
-    // ugyanaz a mesh-pointer többször előfordulhat — minden példányt külön
-    // tölt be).
+    // ---- 1) total-vertex / total-triangle / total-primitive count --------
+    // Node-level iteration: every node that has a mesh (in instancing the same
+    // mesh pointer can appear multiple times — each instance loaded separately).
     int total_verts = 0, total_tris = 0, total_prims = 0;
     for (size_t ni = 0; ni < data->nodes_count; ni++) {
         cgltf_node *node = &data->nodes[ni];
@@ -268,7 +267,7 @@ bool model_load_meshes_gltf(cgltf_data *data, iqm_t *q, model_t *m, int flags) {
         return false;
     }
 
-    // ---- 2) iqm_t mező-alloc --------------------------------------------
+    // ---- 2) iqm_t field allocation --------------------------------------
     q->nummeshes = total_prims;
     q->numverts  = total_verts;
     q->numtris   = total_tris;
@@ -294,12 +293,12 @@ bool model_load_meshes_gltf(cgltf_data *data, iqm_t *q, model_t *m, int flags) {
         float world[16];
         cgltf_node_transform_world(node, world);
 
-        // Y-flip: a motor IQM-konvenciója Y-down a vertex-koordinátarendszer-
-        // ben (a render-pipeline valahol invertálja a Y-tengelyt). A glTF
-        // Y-up vertex-eit erre kell tükrözni. Ezt egy pre-multiply Y-mirror-
-        // mátrix-szal érjük el a world-on. A negatív det automatikusan
-        // triggereli a winding-flippet.
-        world[1]  = -world[1];   // sor 1 (Y row)
+        // Y-flip: the engine's IQM convention is Y-down in vertex-coordinate
+        // space (the render pipeline inverts the Y-axis somewhere). glTF's
+        // Y-up vertices must be mirrored to that. We achieve this with a
+        // pre-multiplied Y-mirror matrix on the world. The resulting negative
+        // determinant automatically triggers the winding flip.
+        world[1]  = -world[1];   // row 1 (Y row)
         world[5]  = -world[5];
         world[9]  = -world[9];
         world[13] = -world[13];
@@ -329,11 +328,11 @@ bool model_load_meshes_gltf(cgltf_data *data, iqm_t *q, model_t *m, int flags) {
             int nv = (int)acc_pos->count;
             int nt = (int)(p->indices->count / 3);
 
-            // ---- Vertex-loop (vertex-attribute-ok world-transform-mal) ----
+            // ---- Vertex-loop (vertex attributes with world-transform) ----
             for (int v = 0; v < nv; v++) {
                 iqm_vertex *iv = &verts[vert_base + v];
 
-                // position (mandatory) — world-transform-mal
+                // position (mandatory) — with world-transform
                 float pos_raw[3] = {0, 0, 0};
                 float pos_w[3];
                 cgltf_accessor_read_float(acc_pos, v, pos_raw, 3);
@@ -354,7 +353,7 @@ bool model_load_meshes_gltf(cgltf_data *data, iqm_t *q, model_t *m, int flags) {
                     float n_w[3];
                     cgltf_accessor_read_float(acc_nrm, v, n_raw, 3);
                     gltf_mul_dir(world, n_raw, n_w);
-                    // re-normalize (a transform skálával eltorzíthatja a hosszt)
+                    // re-normalize (transform scale can distort the length)
                     float l = sqrtf(n_w[0]*n_w[0] + n_w[1]*n_w[1] + n_w[2]*n_w[2]);
                     if (l > 1e-6f) { n_w[0]/=l; n_w[1]/=l; n_w[2]/=l; }
                     iv->normal[0] = n_w[0];
@@ -364,7 +363,7 @@ bool model_load_meshes_gltf(cgltf_data *data, iqm_t *q, model_t *m, int flags) {
                     iv->normal[0] = 0; iv->normal[1] = 1; iv->normal[2] = 0;
                 }
 
-                // texcoord (optional, NO transform — UV-térben él)
+                // texcoord (optional, NO transform — lives in UV space)
                 if (acc_uv) {
                     float uv[2] = {0, 0};
                     cgltf_accessor_read_float(acc_uv, v, uv, 2);
@@ -375,7 +374,7 @@ bool model_load_meshes_gltf(cgltf_data *data, iqm_t *q, model_t *m, int flags) {
                 }
 
                 // tangent (optional, default (1,0,0,1)) — 3x3 direction
-                // (a .w mező a bitangent-jel; megőrzendő a transform-on át).
+                // (the .w field is the bitangent sign; preserve through transform).
                 if (acc_tan) {
                     float t_raw[4] = {1, 0, 0, 1};
                     float t_w[3];
@@ -402,13 +401,13 @@ bool model_load_meshes_gltf(cgltf_data *data, iqm_t *q, model_t *m, int flags) {
                 }
             }
 
-            // ---- Index-loop (winding-flip ha det < 0 a node-transform-on) ----
+            // ---- Index-loop (winding-flip if det < 0 on the node-transform) ----
             for (int t = 0; t < nt; t++) {
                 unsigned i0 = (unsigned)cgltf_accessor_read_index(p->indices, t*3 + 0) + vert_base;
                 unsigned i1 = (unsigned)cgltf_accessor_read_index(p->indices, t*3 + 1) + vert_base;
                 unsigned i2 = (unsigned)cgltf_accessor_read_index(p->indices, t*3 + 2) + vert_base;
                 if (flip_winding) {
-                    // negatív scale a node-on → CCW ↔ CW invertálás
+                    // negative scale on the node → CCW ↔ CW inversion
                     unsigned tmp = i1; i1 = i2; i2 = tmp;
                 }
                 tris[tri_base + t].vertex[0] = i0;
@@ -416,15 +415,15 @@ bool model_load_meshes_gltf(cgltf_data *data, iqm_t *q, model_t *m, int flags) {
                 tris[tri_base + t].vertex[2] = i2;
             }
 
-            // ---- iqmmesh-rekord ----
+            // ---- iqmmesh record ----
             q->meshes[mesh_idx].name           = 0;  // no string table for GLTF
             q->meshes[mesh_idx].material       = 0;
             q->meshes[mesh_idx].first_vertex   = (unsigned)vert_base;
             q->meshes[mesh_idx].num_vertexes   = (unsigned)nv;
             q->meshes[mesh_idx].first_triangle = (unsigned)tri_base;
             q->meshes[mesh_idx].num_triangles  = (unsigned)nt;
-            // Step 3: a primitive material-indexe (a data->materials[] arrayben).
-            // Ha nincs material → 0 (fallback placeholder).
+            // Step 3: the primitive's material index (in the data->materials[] array).
+            // No material → 0 (fallback placeholder).
             unsigned mat_index = 0;
             if (p->material) {
                 mat_index = (unsigned)(p->material - data->materials);
@@ -463,16 +462,16 @@ bool model_load_meshes_gltf(cgltf_data *data, iqm_t *q, model_t *m, int flags) {
     glBindVertexArray(0);
 
     m->stride   = sizeof(iqm_vertex);
-    m->verts    = verts;           // CPU-side (a transparent-sort használja)
+    m->verts    = verts;           // CPU-side (used by transparent-sort)
     m->num_tris = total_tris;
     m->tris     = (void*)tris;     // CPU-side (transparent-sort + debug)
 
     return true;
 }
 
-// Fő entry-pont a `model_from_mem`-ből hívva. mem/len = a betöltött GLTF/GLB
-// blob. GLB-ben minden buffer benne van (cgltf_parse szétpakolja); JSON-only
-// .gltf-nél a `.bin` external file most NEM töltődik (későbbi step).
+// Main entry-point, called from `model_from_mem`. mem/len = the loaded
+// GLTF/GLB blob. In GLB every buffer is contained (cgltf_parse unpacks them);
+// for JSON-only .gltf the external `.bin` file is NOT loaded yet (later step).
 static
 int model_from_mem_gltf(model_t *m, iqm_t *q, const void *mem, int len, int flags) {
     cgltf_options options = {0};
@@ -484,11 +483,11 @@ int model_from_mem_gltf(model_t *m, iqm_t *q, const void *mem, int len, int flag
         return 1;
     }
 
-    // GLB-esetén cgltf_parse már a binary-chunk-ot a `data->buffers[].data`-ba
-    // tölti. JSON-only .gltf esetén `cgltf_load_buffers` kéne a base_dir-rel,
-    // de a model_from_mem szignatúra most nem ad base_dir-t.
-    // Próbáljunk legalább a memory-uri (data:application/octet-stream;base64)
-    // buffer-eket bekapcsolni (NULL base = OK ezekre).
+    // For GLB, cgltf_parse already loads the binary chunk into
+    // `data->buffers[].data`. For JSON-only .gltf we would need
+    // `cgltf_load_buffers` with a base_dir, but model_from_mem's signature
+    // does not currently provide one. Let us at least enable memory-uris
+    // (data:application/octet-stream;base64) — NULL base is OK for those.
     cgltf_load_buffers(&options, data, NULL);
 
     int error = 0;
@@ -496,7 +495,7 @@ int model_from_mem_gltf(model_t *m, iqm_t *q, const void *mem, int len, int flag
         if (!model_load_meshes_gltf(data, q, m, flags)) error = 1;
     }
     if (!error && !(flags & MODEL_NO_TEXTURES)) {
-        // Step 3: strukturált PBR mapping (a stub helyett).
+        // Step 3: structured PBR mapping (instead of the stub).
         model_load_materials_gltf(data, m);
     }
 

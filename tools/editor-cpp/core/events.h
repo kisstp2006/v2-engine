@@ -1,11 +1,11 @@
 #pragma once
 
-// Editor-wide event-keys + payload-struct-ok az EventBus-hoz.
-// Minden subscriber egyezzen meg az itt deklarált payload-típuson.
+// Editor-wide event-keys + payload-structs for the EventBus.
+// Every subscriber must agree on the payload-type declared here.
 //
-// Konvenció: `kEvtFoo` const char* string-key. A payload sztring magában
-// a key (NEM std::string-műveletekhez kell), így O(1)-es string-cmp a
-// hash-bucket-ben.
+// Convention: `kEvtFoo` const char* string-key. The payload string is
+// the key itself (NOT for std::string operations), giving O(1) string-cmp
+// in the hash-bucket.
 
 #include <string>
 #include <vector>
@@ -22,11 +22,11 @@ namespace editor {
 // payload: SelectionChange
 constexpr const char* kEvtSelectionChanged = "selection_changed";
 
-// payload: std::string (asset path, üres = clear). Project panel kattint-ra
-// emit, az Inspector asset-preview módra vált.
+// payload: std::string (asset path, empty = clear). Project panel emits
+// on click, the Inspector switches to asset-preview mode.
 constexpr const char* kEvtAssetSelectionChanged = "asset_selection_changed";
 
-// payload: obj* newRoot (lehet nullptr)
+// payload: obj* newRoot (may be nullptr)
 constexpr const char* kEvtSceneReplaced    = "scene_replaced";
 
 // payload: bool dirty
@@ -53,8 +53,8 @@ constexpr const char* kEvtCookCancelled    = "cook_cancelled";  // CookProgress
 
 // ---- Payload types --------------------------------------------------------
 
-// kEvtSelectionChanged. `primary` az első kijelölt; `all` a teljes lista.
-// Empty `all` esetén `primary == nullptr` (selection cleared).
+// kEvtSelectionChanged. `primary` is the first selected; `all` is the full list.
+// When `all` is empty, `primary == nullptr` (selection cleared).
 struct SelectionChange {
     std::vector<obj*> all;
     obj*              primary = nullptr;
@@ -62,17 +62,17 @@ struct SelectionChange {
 
 // Phase 5a — cook progress payload (kEvtCookStarted/Progress/Cancelled).
 struct CookProgress {
-    int         current = 0;       // hány file feldolgozva
-    int         total   = 0;       // összes file a listában
-    std::string currentFile;       // pl. "assets/audio/foo.mp3" (rel path)
+    int         current = 0;       // how many files processed
+    int         total   = 0;       // total files in the list
+    std::string currentFile;       // e.g. "assets/audio/foo.mp3" (rel path)
 };
 
-// Phase 5a — cook eredmény (kEvtCookFinished).
+// Phase 5a — cook result (kEvtCookFinished).
 struct CookResult {
     int         succeeded = 0;
     int         failed    = 0;
     int         total     = 0;
-    std::string outputPath;        // cook.zip path, ha zip-mode; egyébként üres
+    std::string outputPath;        // cook.zip path if zip-mode; otherwise empty
     bool        cancelled = false;
 };
 

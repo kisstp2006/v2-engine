@@ -1,8 +1,8 @@
-// AudioSource — hang-komponens. Play módban a PlayMode aktiválja: minden
-// AudioSource-ra `audio()` + `speaker()` + `speaker_play()`. Stop módban
-// minden aktív speaker-t `speaker_stop()`. Spatial módban a Scene panel
-// `renderScene`-je frame-enként `speaker_position(pos)`-t hív, a listener
-// pedig a kamera pozícióját kapja `listener_position`-szel.
+// AudioSource — audio-component. In Play mode PlayMode activates each one:
+// per AudioSource an `audio()` + `speaker()` + `speaker_play()`. In Stop
+// mode every active speaker is `speaker_stop()`'d. In spatial mode the
+// Scene panel's `renderScene` calls `speaker_position(pos)` every frame,
+// and the listener gets the camera position via `listener_position`.
 
 #include "engine.h"
 #include "components_api.h"
@@ -13,9 +13,9 @@ typedef struct AudioSource {
     COMPONENT_POS
     char  *clip_path;
     float  volume;       // 0..1
-    float  pitch;        // 0.5..2 ajánlott
-    int    loop;         // 0/1 (motor p2s nem tud bool-t)
-    int    spatial;      // 0/1: ha true 3D pos-attenuation
+    float  pitch;        // 0.5..2 recommended
+    int    loop;         // 0/1 (engine p2s has no bool)
+    int    spatial;      // 0/1: if true → 3D pos-attenuation
 } AudioSource;
 
 OBJTYPEDEF(AudioSource, 70);

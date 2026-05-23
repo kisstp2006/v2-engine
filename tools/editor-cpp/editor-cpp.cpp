@@ -1,12 +1,12 @@
 // tools/editor-cpp/editor-cpp.cpp
 //
-// M0.5a — Kétmódú bootstrap:
-//   - Project picker (transzparens) ha nincs --project flag.
-//   - Dockolható szerkesztő ha van --project <path>.
-// Picker "Open" gombja system()-mel újraindítja a process-t --project-tel.
+// M0.5a — Two-mode bootstrap:
+//   - Project picker (transparent) if no --project flag.
+//   - Dockable editor if --project <path> is set.
+// Picker's "Open" button restarts the process with --project via system().
 
-// STL include-ok ELŐSZÖR — a motor engine.h `is(...)` rövid makrója
-// ütközik az MSVC <xstring> belsejével. Ezért STL → motor sorrend.
+// STL includes FIRST — the engine's short `is(...)` macro from engine.h
+// clashes with MSVC <xstring> internals. Hence STL → engine order.
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -34,7 +34,7 @@ std::string parseProjectFlag() {
 }
 
 int runEditor(const std::string& projectPath) {
-    // Recent-be felemeljük a megnyitott projektet.
+    // Promote the opened project to Recent.
     editor::RecentProjects recents;
     recents.load();
     recents.touch(projectPath);
@@ -60,7 +60,7 @@ int runPicker() {
     }
 
     if (picker.action() == editor::ProjectPickerAction::Open) {
-        // Process restart: új editor-cpp.exe `--project <path>` flag-gel.
+        // Process restart: new editor-cpp.exe with `--project <path>` flag.
         editor::launchEditorWithProject(argv(0), picker.path());
     }
     return 0;

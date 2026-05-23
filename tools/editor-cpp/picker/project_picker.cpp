@@ -9,7 +9,7 @@ namespace editor {
 
 namespace {
 
-// Kis "section label" cap-és típusú felirat — szürkén, kicsit kompresszált.
+// Small "section label" caps-style header — grey, slightly compressed.
 void sectionLabel(const char* text) {
     ImGui::Dummy(ImVec2(0, 6));
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.55f, 0.55f, 1.0f));
@@ -33,7 +33,7 @@ void ProjectPicker::selectPath(const std::string& p) {
 }
 
 void ProjectPicker::pollBrowseResult() {
-    // Win32 IFileOpenDialog modális — nincs pollozás, közvetlen visszatérés.
+    // Win32 IFileOpenDialog is modal — no polling, direct return.
 }
 
 void ProjectPicker::drawHeader(float availWidth, float padX) {
@@ -147,7 +147,7 @@ void ProjectPicker::draw() {
     }
     ImGui::End();
 
-    // Modal a New Project wizardhoz — a window-on KÍVÜL kell hívni.
+    // Modal for the New Project wizard — must be called OUTSIDE the window.
     newDialog_.update();
     if (newDialog_.created()) {
         selectPath(newDialog_.createdPath());

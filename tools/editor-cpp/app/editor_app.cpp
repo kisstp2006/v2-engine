@@ -1,4 +1,4 @@
-// STL ELŐSZÖR.
+// STL FIRST.
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -38,12 +38,12 @@ EditorApp::EditorApp(std::string projectPath)
 EditorApp::~EditorApp() = default;
 
 void EditorApp::buildPanels() {
-    // Registry-ből építjük — minden panel a saját .cpp végén
-    // REGISTER_PANEL(Type, order)-rel regisztrál magától.
+    // Built from the registry — every panel registers itself via
+    // REGISTER_PANEL(Type, order) at the end of its own .cpp.
     for (const auto& d : PanelRegistry::all()) {
         panels_.emplace_back(d.factory());
     }
-    // Pointer-cache a Console-ra a bus dispatcher számára.
+    // Pointer-cache the Console for the bus dispatcher.
     for (auto& p : panels_) {
         if (p->id() == "console") {
             console_ = static_cast<ConsolePanel*>(p.get());
@@ -54,9 +54,9 @@ void EditorApp::buildPanels() {
 
 std::string EditorApp::makeRelativeIfInside(const char* inputPath) {
     if (!inputPath || !*inputPath) return {};
-    // Ha már relatív, hagyjuk békén.
+    // If already relative, leave it alone.
     if (!asset_path::isAbsolute(inputPath)) return inputPath;
-    // Abs + projekten kívül → kéznél tartjuk + warning.
+    // Abs + outside project → keep as-is + warning.
     if (!asset_path::isWithinProject(inputPath, projectPath_)) {
         bus_.emit(kEvtLogWarn,
             std::string("[Asset] outside project, abs-path kept: ") + inputPath);
@@ -150,7 +150,7 @@ void EditorApp::saveSceneAs() {
 }
 
 extern "C" {
-extern char apptitle[128];   // motor `game_app2.h:60` globális buffer
+extern char apptitle[128];   // engine `game_app2.h:60` global buffer
 }
 
 void EditorApp::refreshWindowTitle() {
@@ -184,8 +184,8 @@ void EditorApp::openScene(const std::string& path) {
         if (console_) console_->log(std::string("[Scene] read failed: ") + path);
         return;
     }
-    // Phase 4b — auto-migration: a régi abs path-os scene-ek mezőit
-    // relatívra konvertáljuk load közben.
+    // Phase 4b — auto-migration: convert old abs-path fields in scenes
+    // to relative during load.
     LoadResult r = SceneIO::loadTreeDetailed(std::string(content), projectPath_);
     if (console_) {
         for (const auto& e : r.errors) {
@@ -201,7 +201,7 @@ void EditorApp::openScene(const std::string& path) {
     if (!r.root) return;
     scene_.replaceRoot(r.root);   // kEvtSceneReplaced → selection sanitize
     lastSavedPath_ = path;
-    // Ha történt path-migration → dirty (felhasználó látja a *-ot, és Save-zheti).
+    // If path-migration happened → dirty (user sees the *, and can Save).
     isDirty_ = (r.migrated_paths > 0);
     bus_.emit(kEvtSceneDirty, isDirty_);
 }
@@ -289,8 +289,8 @@ CookRunner& EditorApp::cookRunner() {
 
 namespace {
 
-// Phase 5a — assets/ alatti összes fájl absz-path-listája (rejtett-prefixű,
-// már cookolt fájlok kihagyva).
+// Phase 5a — abs-path list of every file under assets/ (hidden-prefix,
+// already-cooked files skipped).
 std::vector<std::string> collectAssetFiles(const std::string& projectPath) {
     std::vector<std::string> out;
     if (projectPath.empty()) return out;
@@ -314,8 +314,8 @@ std::vector<std::string> collectAssetFiles(const std::string& projectPath) {
 
 namespace {
 
-// Phase 5c — issue-listából Console-log szétdobás. Severity szerint
-// kEvtLogInfo/Warn/Error → színes a Console-ban.
+// Phase 5c — distribute Console-log from issue-list. By severity:
+// kEvtLogInfo/Warn/Error → colored in Console.
 void logIssues(EditorApp& app, const std::vector<AssetIssue>& issues) {
     for (const auto& i : issues) {
         std::string line = std::string("[Validation] ") + i.typeName + " '" +
@@ -335,9 +335,9 @@ void EditorApp::generateLuaStubs(bool force) {
         bus_.emit(kEvtLogWarn, std::string("[LuaIDE] no project loaded"));
         return;
     }
-    // A motor `engine.ffi`-je a v2 repo `code/game/embed/`-jében van —
-    // editor-cpp.exe CWD-jéhez képest "code/game/embed/engine.ffi".
-    // (A ScriptHost is így olvassa: script_host.cpp:36.)
+    // The engine's `engine.ffi` lives in the v2 repo `code/game/embed/` —
+    // relative to editor-cpp.exe CWD this is "code/game/embed/engine.ffi".
+    // (ScriptHost reads it the same way: script_host.cpp:36.)
     std::string ffiPath = "code/game/embed/engine.ffi";
     auto r = ffi_to_emmylua::generate(projectPath_, ffiPath, force);
     if (!r.ok) {
@@ -378,7 +378,7 @@ void EditorApp::startCookInPlaceAllAssets() {
             std::string("[Cook] no assets to cook under: ") + projectPath_);
         return;
     }
-    // Phase 5c — pre-cook validation. Error esetén modal prompt, cook defer.
+    // Phase 5c — pre-cook validation. On Error: modal prompt, cook defer.
     auto issues = AssetValidator::validate(*this);
     logIssues(*this, issues);
     int errs = AssetValidator::countErrors(issues);
@@ -431,14 +431,14 @@ void EditorApp::requestCookCancel() {
 }
 
 void EditorApp::drawCookValidationPopup() {
-    // Egyszer-frame OpenPopup trigger.
+    // One-shot OpenPopup trigger.
     if (cookPrompt_.openRequested) {
         ImGui::OpenPopup("Cook validation issues");
         cookPrompt_.openRequested = false;
     }
 
-    // A modal mindig megpróbál renderelni — ha NEM nyitott, BeginPopupModal
-    // azonnal false-t ad vissza, és a tartalom nem fut.
+    // The modal always tries to render — if NOT open, BeginPopupModal
+    // returns false immediately and the content does not run.
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSizeConstraints(ImVec2(420, 200), ImVec2(900, 600));
@@ -524,7 +524,7 @@ void EditorApp::spawnPrefab(const char* path) {
         return;
     }
     obj* root = scene_.root() ? scene_.root() : ensureRoot();
-    // Phase 4b — projectPath_ átadva: prefab-on belüli abs-path-ok is rel-re.
+    // Phase 4b — projectPath_ passed in: abs-paths inside the prefab also become rel.
     obj* sub = SceneIO::loadSubtree(root, std::string(content), projectPath_);
     if (!sub) {
         if (console_) console_->log(std::string("[Prefab] parse failed: ") + path);
@@ -536,11 +536,11 @@ void EditorApp::spawnPrefab(const char* path) {
 }
 
 void EditorApp::wireUp() {
-    // SceneService → bus, hogy a replaceRoot emit-eljen kEvtSceneReplaced-et.
+    // SceneService → bus, so that replaceRoot emits kEvtSceneReplaced.
     scene_.setBus(&bus_);
     commands_.setBus(&bus_);
 
-    // Phase 3e — severity-aware log dispatcher (3x ugyanaz a kód, csak más sev).
+    // Phase 3e — severity-aware log dispatcher (3x the same code, only different sev).
     auto subscribeLog = [this](const char* key, LogSeverity sev) {
         bus_.on(key, [this, sev](const std::any& data) {
             if (!console_) return;
@@ -555,8 +555,8 @@ void EditorApp::wireUp() {
     subscribeLog(kEvtLogWarn,  LogSeverity::Warn);
     subscribeLog(kEvtLogError, LogSeverity::Error);
     bus_.on(kEvtSelectionChanged, [this](const std::any& data) {
-        // Új payload: SelectionChange struct. Backward-compat: ha valaki még
-        // raw obj*-t küld, azt is fogjuk.
+        // New payload: SelectionChange struct. Backward-compat: if anyone still
+        // sends a raw obj*, we accept that too.
         obj* o = nullptr;
         if (data.type() == typeid(SelectionChange)) {
             const auto& sc = std::any_cast<const SelectionChange&>(data);
@@ -578,23 +578,23 @@ void EditorApp::wireUp() {
         isDirty_ = dirty;
     });
 
-    // Scene replace → defenzív takarítás (sorrend FONTOS):
-    //   1. ScriptHost: lua_close minden VM-en (obj-pointer-key dangling).
-    //   2. PlayMode audio: az új scene-ben már nincs előző AudioSource node.
-    //   3. SelectionService: a régi pointer-eket eldobja.
+    // Scene replace → defensive cleanup (ORDER MATTERS):
+    //   1. ScriptHost: lua_close on every VM (obj-pointer-key dangling).
+    //   2. PlayMode audio: no previous AudioSource node exists in the new scene.
+    //   3. SelectionService: drop the old pointers.
     bus_.on(kEvtSceneReplaced, [this](const std::any& data) {
         obj* const* op = std::any_cast<obj*>(&data);
         obj* newRoot = op ? *op : nullptr;
         if (scriptHost_) scriptHost_->unloadAll();
-        // PlayMode audio cleanup: csak Play-mode-ban van aktív, de defenzív.
-        // (A stopAllAudio publikus volt; ha nem, nem kritikus.)
+        // PlayMode audio cleanup: only active in Play-mode, but defensive.
+        // (stopAllAudio was public; if not, not critical.)
         selection_.sanitize(newRoot);
     });
     bus_.emit(kEvtLogInfo,
               std::string("Editor started. Project: ") + projectPath_);
 
-    // Phase 6a — auto-generate Lua API stubs (mtime-cache: no-op ha az
-    // engine.ffi NEM változott a tárolt .luarc/engine.d.lua óta).
+    // Phase 6a — auto-generate Lua API stubs (mtime-cache: no-op if
+    // engine.ffi has NOT changed since the stored .luarc/engine.d.lua).
     if (!projectPath_.empty()) {
         generateLuaStubs(/*force=*/false);
     }
@@ -745,9 +745,9 @@ void EditorApp::drawMenubar() {
         }
         if (ImGui::BeginMenu("Scripting")) {
             if (ImGui::MenuItem("Script (empty path)")) {
-                // Unity-mintára: ha van kijelölés, a Script annak child-ja
-                // legyen (a Lua `obj_parent(self)` így az adott GameObject-re
-                // mutat, és olvashatja annak Transform/MeshRenderer pos-át).
+                // If there is a selection, make the Script a child
+                // of it (so Lua `obj_parent(self)` points to that GameObject
+                // and can read its Transform/MeshRenderer pos).
                 createScript("", selection_.primary());
             }
             ImGui::EndMenu();
@@ -792,16 +792,16 @@ void EditorApp::drawFrame() {
     ImGuizmo_BeginFrame();
 
     // Phase 5a — background-tasks (cook worker) → main-thread drain.
-    // Itt futnak le a worker által enqueue-zott bus.emit hívások.
+    // The bus.emit calls enqueued by the worker run here.
     mainQueue_.drainOnMainThread();
     if (cookRunner_) cookRunner_->joinIfDone();
 
-    // Play-mode frame-tick: scriptek on_update(dt) + mtime-poll auto-reload.
-    // Edit módban no-op.
+    // Play-mode frame-tick: scripts on_update(dt) + mtime-poll auto-reload.
+    // No-op in Edit mode.
     play_.frameTick(*this, app_delta());
 
-    // Ctrl+Z / Ctrl+Y globális undo/redo. Az ImGui IO-jából olvasunk
-    // hogy ne kelljen a motor-szintű `binding`-be belekapcsolni.
+    // Ctrl+Z / Ctrl+Y global undo/redo. We read from ImGui IO so we don't
+    // need to hook into the engine-level `binding`.
     if (ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift) {
         if (ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
             commands_.undo();
@@ -813,20 +813,20 @@ void EditorApp::drawFrame() {
         }
     }
 
-    // W / E / R — gizmo-mode (Unity-paritás). Csak akkor ha NEM szövegmező-edit.
+    // W / E / R — gizmo-mode. Only when NOT editing a text field.
     if (!ImGui::GetIO().KeyCtrl && !ImGui::GetIO().WantTextInput) {
         if (ImGui::IsKeyPressed(ImGuiKey_W, false)) gizmoOp_ = 7;     // TRANSLATE
         if (ImGui::IsKeyPressed(ImGuiKey_E, false)) gizmoOp_ = 120;   // ROTATE
         if (ImGui::IsKeyPressed(ImGuiKey_R, false)) gizmoOp_ = 896;   // SCALE
     }
 
-    // Ctrl+S — Save Scene gyors-mentés (lastSavedPath-ra vagy saveSceneAs).
+    // Ctrl+S — Save Scene quick-save (to lastSavedPath or saveSceneAs).
     if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) {
         saveScene();
     }
 
-    // Window-title minden frame frissítjük (a `*` modified-indikátor és a
-    // scene-basename érdekes lehet).
+    // We refresh the window-title every frame (the `*` modified-indicator and
+    // the scene-basename can be of interest).
     refreshWindowTitle();
 
     drawMenubar();
@@ -835,14 +835,14 @@ void EditorApp::drawFrame() {
         p->draw(*this);
     }
 
-    // Phase 5c — pre-cook validation modal (felülrétegben).
+    // Phase 5c — pre-cook validation modal (top-layer).
     drawCookValidationPopup();
 }
 
 void EditorApp::run() {
-    // Az ESC-quit szándékosan eltávolítva (Phase 3e): a Scene panel freefly-
-    // ben az ESC a cursor-restore-t szolgálja. Kilépéshez: File → Exit,
-    // ablak-close gomb, vagy `quit()`.
+    // ESC-quit was intentionally removed (Phase 3e): in Scene panel freefly,
+    // ESC serves cursor-restore. To exit: File → Exit, window-close button,
+    // or `quit()`.
     while (app_swap() && !quit_) {
         drawFrame();
     }

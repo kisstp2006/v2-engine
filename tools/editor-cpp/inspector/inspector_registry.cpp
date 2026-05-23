@@ -1,4 +1,4 @@
-// STL ELŐSZÖR.
+// STL FIRST.
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -30,8 +30,8 @@ void InspectorRegistry::registerDrawer(
 
 namespace {
 
-// 2-oszlopos label + widget layout, a motor `ui_*` widgetjei stílusához
-// illesztve (motor game_ui2.h:UI_LABEL_1OF2 / 2OF2 mintára).
+// 2-column label + widget layout, matched to the style of the engine's `ui_*`
+// widgets (modeled after engine game_ui2.h:UI_LABEL_1OF2 / 2OF2).
 bool labelCol(const char* label) {
     if (!ImGui::BeginTable("##lc", 2,
                            ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp))
@@ -48,8 +48,8 @@ void labelColEnd() {
     ImGui::EndTable();
 }
 
-// Hint-string parserek (M16a). A `STRUCT(T,t,m,"[hint] ...")` 4. paramétere
-// a reflect_t.info-ba kerül "M" prefix-szel és " (FILELINE)" suffix-szel.
+// Hint-string parsers (M16a). The 4th parameter of `STRUCT(T,t,m,"[hint] ...")`
+// goes into reflect_t.info with an "M" prefix and a " (FILELINE)" suffix.
 bool hintHas(const char* info, const char* tag) {
     return info && strstr(info, tag) != nullptr;
 }
@@ -68,8 +68,8 @@ bool hintRangeInt(const char* info, int* mn, int* mx) {
     return sscanf(p, "[range %d %d]", mn, mx) == 2;
 }
 
-// Phase 2c: a primary mező-értékét propagálja minden további targets[i] node
-// azonos-offsetű mezőjébe. Csak HOMOGÉN selection-re hívandó.
+// Phase 2c: propagates the primary's field value into every further targets[i]
+// node's same-offset field. Only call this on HOMOGENEOUS selections.
 void propagateField(const std::vector<obj*>& targets, void* p_primary,
                     const reflect_t* R) {
     if (targets.size() <= 1) return;
@@ -89,11 +89,11 @@ void propagateField(const std::vector<obj*>& targets, void* p_primary,
     }
 }
 
-// Saját replika a motor `ui_obj`-jából — hint-string-vezérelt widget-választás
-// + `char*` mezőkhöz drag-drop target az ASSET_PATH payload-hoz.
-// Multi-targets vector — primary = targets[0]. Egy frame-en belül a primary-n
-// szerkesztett mező AUTOMATIKUSAN syncel a többi targets[i]-re (ha
-// ImGui::IsItemEdited()-tel detektálható).
+// Our own replica of the engine's `ui_obj` — hint-string-driven widget choice
+// + drag-drop target for ASSET_PATH payload on `char*` fields.
+// Multi-targets vector — primary = targets[0]. Within a frame, the field
+// edited on the primary AUTOMATICALLY syncs to the other targets[i] (when
+// detectable with ImGui::IsItemEdited()).
 void drawDefaultReflection(const std::vector<obj*>& targets) {
     if (targets.empty() || !targets[0]) return;
     obj* o = targets[0];
@@ -113,10 +113,10 @@ void drawDefaultReflection(const std::vector<obj*>& targets) {
 
         HintInfo h = parseHint(info);
 
-        // [hidden] → ne rajzolja
+        // [hidden] → don't draw it
         if (h.isHidden) continue;
 
-        // [readonly] → minden widget disabled
+        // [readonly] → every widget disabled
         if (h.isReadonly) ImGui::BeginDisabled();
 
         /**/ if (!strcmp(mt, "float")) {
@@ -163,8 +163,8 @@ void drawDefaultReflection(const std::vector<obj*>& targets) {
         else if (!strcmp(mt, "rgba"))     ui_color4(mn, (unsigned*)p);
         else if (!strcmp(mt, "char*") || !strcmp(mt, "string")) {
             if (h.isMultiline) {
-                // Multiline: char*-ot konvertáljuk fix-buffer-rel ImGui-stílusra
-                // (egyszerű — a felhasználói edit visszaírja a STRDUP-pal).
+                // Multiline: convert char* with a fixed-buffer to ImGui-style
+                // (simple — the user edit writes it back with STRDUP).
                 if (labelCol(mn)) {
                     static char buf[4096];
                     const char* cur = *(char**)p ? *(char**)p : "";
@@ -181,8 +181,8 @@ void drawDefaultReflection(const std::vector<obj*>& targets) {
             } else {
                 ui_string(mn, (char**)p);
             }
-            // Phase 4a — relativize-callback. Abs path → projekt-relatív
-            // string (ha az asset projekten belül van), egyébként abs marad.
+            // Phase 4a — relativize-callback. Abs path → project-relative
+            // string (if the asset is within the project), otherwise stays abs.
             const std::string& projectPath =
                 InspectorRegistry::instance().projectPath();
             auto relativize = [&projectPath](const std::string& abs) -> std::string {
@@ -193,8 +193,8 @@ void drawDefaultReflection(const std::vector<obj*>& targets) {
                 return abs;
             };
 
-            // Asset-Browse button az [asset:*] hint esetén — kis "..." gomb
-            // a path-mező mellett. Filter a hint-érték szerint.
+            // Asset-Browse button for the [asset:*] hint — small "..." button
+            // next to the path-field. Filter based on the hint-value.
             if (!h.assetType.empty()) {
                 ImGui::SameLine();
                 ImGui::PushID((void*)R);
@@ -216,7 +216,7 @@ void drawDefaultReflection(const std::vector<obj*>& targets) {
                 }
                 ImGui::PopID();
             }
-            // Drop target: a Project panelből húzott asset path-ja felülír.
+            // Drop target: an asset path dragged from the Project panel overrides it.
             if (ImGui::BeginDragDropTarget()) {
                 if (const ImGuiPayload* pl =
                         ImGui::AcceptDragDropPayload("ASSET_PATH")) {
@@ -232,7 +232,7 @@ void drawDefaultReflection(const std::vector<obj*>& targets) {
             ui_label2(mn, va("(%s)", mt));
         }
 
-        // [suffix:°] — érték mellé text-suffix
+        // [suffix:°] — text-suffix next to the value
         if (!h.suffix.empty()) {
             ImGui::SameLine();
             ImGui::TextDisabled("%s", h.suffix.c_str());
@@ -240,9 +240,9 @@ void drawDefaultReflection(const std::vector<obj*>& targets) {
 
         if (h.isReadonly) ImGui::EndDisabled();
 
-        // Phase 2c: multi-edit. A primary mező-értékét minden frame syncelve
-        // propagáljuk a többi targets[i]-re. Single-mode (targets.size()==1)
-        // esetén no-op.
+        // Phase 2c: multi-edit. We propagate the primary's field value to the
+        // other targets[i], synced every frame. Single-mode (targets.size()==1)
+        // is no-op.
         propagateField(targets, p, R);
     }
 }
@@ -265,8 +265,8 @@ void InspectorRegistry::drawComponents(obj* o) {
         }
     }
 
-    // Fallback: saját reflection-render (mint a motor ui_obj, plusz drag-drop
-    // target a char* mezőkön).
+    // Fallback: our own reflection-render (like the engine's ui_obj, plus a
+    // drag-drop target on char* fields).
     drawDefaultReflection({o});
 }
 
@@ -274,21 +274,21 @@ void InspectorRegistry::drawComponentsMulti(const std::vector<obj*>& targets) {
     if (targets.empty()) return;
     if (targets.size() == 1) { drawComponents(targets[0]); return; }
 
-    // Csak homogén selection: minden node-ra ugyanaz az obj_type. Heterogén
-    // esetén csak a primary-t mutatjuk (single-mode fallback).
+    // Only homogeneous selection: every node has the same obj_type. In
+    // heterogeneous cases we only show the primary (single-mode fallback).
     const char* primaryType = obj_type(targets[0]);
     if (!primaryType) { drawComponents(targets[0]); return; }
     for (size_t i = 1; i < targets.size(); ++i) {
         const char* t = targets[i] ? obj_type(targets[i]) : nullptr;
         if (!t || strcmp(t, primaryType) != 0) {
-            drawComponents(targets[0]);  // heterogén → single
+            drawComponents(targets[0]);  // heterogeneous → single
             return;
         }
     }
-    // Custom drawer? Single-only — a multi-edit-hez fallback drawDefaultReflection.
+    // Custom drawer? Single-only — for multi-edit fall back to drawDefaultReflection.
     auto it = drawers_.find(primaryType);
     if (it != drawers_.end()) {
-        it->second->draw(targets[0]);   // custom drawer marad single
+        it->second->draw(targets[0]);   // custom drawer stays single
         return;
     }
     drawDefaultReflection(targets);

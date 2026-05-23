@@ -1,4 +1,4 @@
-// STL ELŐSZÖR (motor `is(...)` macro ütközés elkerülése).
+// STL FIRST (avoid clash with engine `is(...)` macro).
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
@@ -34,7 +34,7 @@ void RecentProjects::load() {
     if (!f) return;
     std::string line;
     while (std::getline(f, line)) {
-        // egyszerű trim-szerű: CR levágás Windows EOL után
+        // simple trim-like: strip CR after Windows EOL
         while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) {
             line.pop_back();
         }

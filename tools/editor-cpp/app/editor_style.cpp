@@ -24,7 +24,7 @@ constexpr ImVec4 kBorderShadow = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
 void applyStyle() {
     ImGuiStyle& s = ImGui::GetStyle();
 
-    // ---- Density: kompakt (Unity Inspector) ----
+    // ---- Density: compact Inspector ----
     s.WindowPadding     = ImVec2(6, 6);
     s.FramePadding      = ImVec2(4, 2);
     s.CellPadding       = ImVec2(4, 2);
@@ -34,7 +34,7 @@ void applyStyle() {
     s.ScrollbarSize     = 12.0f;
     s.GrabMinSize       = 8.0f;
 
-    // ---- Sarkok: élesek (0 px) ----
+    // ---- Corners: sharp (0 px) ----
     s.WindowRounding    = 0.0f;
     s.ChildRounding     = 0.0f;
     s.FrameRounding     = 0.0f;
@@ -43,14 +43,14 @@ void applyStyle() {
     s.GrabRounding      = 0.0f;
     s.TabRounding       = 0.0f;
 
-    // ---- Szegélyek ----
+    // ---- Borders ----
     s.WindowBorderSize  = 1.0f;
     s.ChildBorderSize   = 1.0f;
     s.PopupBorderSize   = 1.0f;
     s.FrameBorderSize   = 0.0f;
     s.TabBorderSize     = 0.0f;
 
-    // ---- Színpaletta (Unity / VS Code dark + #4a9eff accent) ----
+    // ---- Color palette (VS Code dark + #4a9eff accent) ----
     ImVec4* c = s.Colors;
 
     c[ImGuiCol_Text]                 = kText;

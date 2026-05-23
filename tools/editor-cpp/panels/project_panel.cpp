@@ -1,4 +1,4 @@
-// STL ELŐSZÖR.
+// STL FIRST.
 #include <algorithm>
 #include <filesystem>
 #include <string>
@@ -21,8 +21,8 @@ namespace {
 
 namespace fs = std::filesystem;
 
-// Path-segéd: forward-slash normalizálás (Windows-fok backslash-t használ
-// a `fs::path::string()`-ben, és a breadcrumb/console-log csúnya).
+// Path helper: forward-slash normalization (Windows uses backslash
+// in `fs::path::string()`, and the breadcrumb/console-log looks ugly).
 std::string normSlash(std::string s) {
     std::replace(s.begin(), s.end(), '\\', '/');
     return s;
@@ -58,8 +58,8 @@ void ProjectPanel::draw(EditorApp& app) {
     }
 
     fs::path current = fs::path(current_dir_);
-    // Védelem: ha a current_dir_ valamiért már nincs / kívül van az
-    // assets-en, vissza-állunk az assetsRoot-ra.
+    // Safeguard: if current_dir_ no longer exists / is outside
+    // assets, we fall back to assetsRoot.
     if (!fs::is_directory(current, ec)) {
         current = assetsRoot;
         current_dir_ = current.string();
@@ -74,9 +74,9 @@ void ProjectPanel::draw(EditorApp& app) {
     }
     ImGui::SameLine();
 
-    // Breadcrumb — kattintható szegmensek az assetsRoot-tól a current-ig.
+    // Breadcrumb — clickable segments from assetsRoot to current.
     {
-        // Relatív rész: assets / sub1 / sub2 / ...
+        // Relative part: assets / sub1 / sub2 / ...
         fs::path relTail = fs::relative(current, assetsRoot.parent_path(), ec);
         if (ec) relTail = current.filename();
         std::vector<std::string> segs;
@@ -100,7 +100,7 @@ void ProjectPanel::draw(EditorApp& app) {
         }
     }
 
-    // Import gomb a jobb oldalon.
+    // Import button on the right side.
     {
         const char* importLabel = "Import Asset...";
         float btnW = ImGui::CalcTextSize(importLabel).x +
@@ -129,8 +129,8 @@ void ProjectPanel::draw(EditorApp& app) {
 
     ImGui::Separator();
 
-    // ---- Mappa-tartalom listája -------------------------------------------
-    // Mappák először, aztán fájlok — alfabetikus.
+    // ---- Folder content listing -------------------------------------------
+    // Folders first, then files — alphabetical.
     std::vector<fs::directory_entry> dirs, files;
     for (auto& e : fs::directory_iterator(current, ec)) {
         if (e.is_directory(ec)) dirs.push_back(e);
@@ -142,7 +142,7 @@ void ProjectPanel::draw(EditorApp& app) {
     std::sort(dirs.begin(),  dirs.end(),  cmp);
     std::sort(files.begin(), files.end(), cmp);
 
-    // Mappák — double-click belép, sima kattint csak kijelöl.
+    // Folders — double-click enters, plain click only selects.
     for (auto& d : dirs) {
         std::string name = d.path().filename().string();
         std::string full = d.path().string();
@@ -156,7 +156,7 @@ void ProjectPanel::draw(EditorApp& app) {
         ImGui::PopID();
     }
 
-    // Fájlok — drag-source (M10b megőrzött) + double-click via registry.
+    // Files — drag-source (M10b preserved) + double-click via registry.
     // 1-click: SelectionService.setSelectedAsset → Inspector asset-preview.
     const FileTypeRegistry& reg = FileTypeRegistry::instance();
     const std::string& selectedAsset = app.selection().selectedAsset();
@@ -168,7 +168,7 @@ void ProjectPanel::draw(EditorApp& app) {
         ImGui::Selectable(name.c_str(), isSel,
                           ImGuiSelectableFlags_AllowDoubleClick);
         if (ImGui::IsItemHovered()) {
-            // Tooltip: full path + handler-label (ha van).
+            // Tooltip: full path + handler-label (if any).
             const FileTypeHandler* h = reg.handlerFor(full);
             if (h) {
                 ImGui::SetTooltip("%s\n[%s — double-click to open]",
@@ -177,8 +177,8 @@ void ProjectPanel::draw(EditorApp& app) {
                 ImGui::SetTooltip("%s", full.c_str());
             }
         }
-        // Drag source (M10b megőrzött) — payload = teljes abszolút path
-        // (NUL-terminált).
+        // Drag source (M10b preserved) — payload = full absolute path
+        // (NUL-terminated).
         if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
             ImGui::SetDragDropPayload("ASSET_PATH", full.c_str(),
                                       full.size() + 1);

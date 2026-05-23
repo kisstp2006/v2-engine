@@ -1,4 +1,4 @@
-// STL ELŐSZÖR.
+// STL FIRST.
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -48,7 +48,7 @@ bool startsWith(const std::string& s, const std::string& p) {
     return s.size() >= p.size() && s.compare(0, p.size(), p) == 0;
 }
 
-// --- C-comment strip (only /* ... */, line-comments are nem szabványos C) --
+// --- C-comment strip (only /* ... */, line-comments are not standard C) --
 
 std::string stripBlockComments(const std::string& src) {
     std::string out; out.reserve(src.size());
@@ -67,7 +67,7 @@ std::string stripBlockComments(const std::string& src) {
 
 // --- Type-mapping: C-typedecl → EmmyLua type-string -----------------------
 
-// A struct/typedef-class neveket gyűjtjük futás közben → ezek "class-name"-ek.
+// We collect struct/typedef-class names at runtime → these are the "class-names".
 struct TypeContext {
     std::unordered_set<std::string> knownClasses;
     bool isClass(const std::string& n) const {
@@ -102,7 +102,7 @@ bool isFloatKeyword(const std::string& w) {
 bool isVoidKeyword(const std::string& w) { return w == "void"; }
 bool isBoolKeyword(const std::string& w) { return w == "bool" || w == "_Bool"; }
 
-// Egy C-típus-string EmmyLua-típusra. Pl.:
+// Maps a C-type-string to an EmmyLua-type. E.g.:
 //   "const char*"     → "string"
 //   "int"             → "integer"
 //   "float"           → "number"
@@ -113,7 +113,7 @@ bool isBoolKeyword(const std::string& w) { return w == "bool" || w == "_Bool"; }
 std::string mapType(std::string cType, const TypeContext& ctx) {
     std::string t = collapseWs(cType);
 
-    // Strip qualifiers (jobb felismeréshez)
+    // Strip qualifiers (for better recognition)
     static const std::vector<std::string> qualifiers = {
         "const", "volatile", "static", "extern", "register",
         "__stdcall", "__cdecl", "__fastcall", "__declspec(dllimport)",
@@ -136,7 +136,7 @@ std::string mapType(std::string cType, const TypeContext& ctx) {
     if (startsWith(t, "enum "))   t = t.substr(5);
     t = trim(t);
 
-    // Egyszerű kulcsszavak
+    // Simple keywords
     if (isVoidKeyword(t)) {
         if (ptrs > 0) return "lightuserdata";
         return "nil";
@@ -149,18 +149,18 @@ std::string mapType(std::string cType, const TypeContext& ctx) {
     if (t == "char" && ptrs >= 1)  return "string";
     if (t == "wchar_t" && ptrs >= 1) return "string";
 
-    // Ismert class (registered)?
+    // Known class (registered)?
     if (ctx.isClass(t)) {
         if (ptrs > 0) return t;
         return t;
     }
 
-    // Ismeretlen: ha pointer → opaque. Egyébként any.
+    // Unknown: if pointer → opaque. Otherwise any.
     if (ptrs > 0) return "lightuserdata";
     return "any";
 }
 
-// --- Parser: paraméterlista felbontás zárójel-aware --------------------
+// --- Parser: parameter-list splitting (parenthesis-aware) --------------------
 
 // "int x, const char *s, vec3 v" → ["int x", "const char *s", "vec3 v"]
 std::vector<std::string> splitArgs(const std::string& argsStr) {
@@ -183,14 +183,14 @@ std::vector<std::string> splitArgs(const std::string& argsStr) {
     return out;
 }
 
-// Egy paraméter-string ("const char *name") → (type, name).
+// One parameter-string ("const char *name") → (type, name).
 struct Param { std::string type; std::string name; };
 Param splitParam(const std::string& p) {
     Param out;
     std::string s = collapseWs(p);
     if (s.empty() || s == "void") return out;
 
-    // Array-suffix kezelés: "int x[16]" → name="x", type="int*"
+    // Array-suffix handling: "int x[16]" → name="x", type="int*"
     bool isArray = false;
     size_t bracket = s.find('[');
     if (bracket != std::string::npos) {
@@ -198,16 +198,16 @@ Param splitParam(const std::string& p) {
         s = trim(s.substr(0, bracket));
     }
 
-    // Az utolsó tokent a name-nek vesszük, kivéve ha csak típus van
-    // (pl. "int" - név-nélküli paraméter).
+    // We take the last token as the name, unless there's only a type
+    // (e.g. "int" — unnamed parameter).
     size_t lastSp = s.find_last_of(" \t*");
     if (lastSp == std::string::npos) {
         out.type = s;
         return out;
     }
-    // A `*` is típushoz tartozik.
+    // The `*` also belongs to the type.
     std::string maybeName = s.substr(lastSp + 1);
-    // Ha a maybeName-ben minden csak `*` vagy üres, akkor anonymous param.
+    // If everything in maybeName is just `*` or empty, then it's an anonymous param.
     bool allStars = !maybeName.empty();
     for (char c : maybeName)
         if (c != '*') { allStars = false; break; }
@@ -229,9 +229,9 @@ struct ParsedFunc {
     std::vector<Param> params;
 };
 
-// `(int x, ..., ...)` → split + map. Az `...` variadic skip.
+// `(int x, ..., ...)` → split + map. Skip the `...` variadic.
 bool parseFunction(const std::string& line, ParsedFunc& out) {
-    // Egyszerű 1-soros minta: `<type> <name>(<args>);`
+    // Simple 1-line pattern: `<type> <name>(<args>);`
     static const std::regex re(
         R"(^\s*([A-Za-z_][A-Za-z0-9_\s\*]*[\s\*])\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(([^()]*)\)\s*;\s*$)");
     std::smatch m;
@@ -240,7 +240,7 @@ bool parseFunction(const std::string& line, ParsedFunc& out) {
     out.retType = collapseWs(m[1].str());
     out.name    = m[2].str();
 
-    // Skip-list: nem motor-API, GL/SDL/X11 belső, debug-callback
+    // Skip-list: non-engine-API, GL/SDL/X11 internal, debug-callback
     static const std::vector<std::string> skipPrefixes = {
         "gl", "PFNGL", "GL_", "glad", "GLAD",
         "__", "_",
@@ -259,8 +259,8 @@ bool parseFunction(const std::string& line, ParsedFunc& out) {
 
 // --- typedef struct extractor ---------------------------------------------
 
-// `typedef struct NAME NAME;` vagy `typedef struct { ... } NAME;` minták.
-// Egyszerűsítve: az utolsó identifier a typedef-név.
+// `typedef struct NAME NAME;` or `typedef struct { ... } NAME;` patterns.
+// Simplified: the last identifier is the typedef-name.
 void collectTypedefStructs(const std::string& src, TypeContext& ctx) {
     static const std::regex re(
         R"(typedef\s+(?:struct|union|enum)\s+(?:[A-Za-z_][A-Za-z0-9_]*\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*;)");
@@ -269,7 +269,7 @@ void collectTypedefStructs(const std::string& src, TypeContext& ctx) {
     for (auto it = begin; it != end; ++it) {
         ctx.knownClasses.insert((*it)[1].str());
     }
-    // Plus: `struct NAME { ... };`-szerű (előre-deklaráció).
+    // Plus: `struct NAME { ... };`-style (forward-declaration).
     static const std::regex re2(
         R"(struct\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{)");
     begin = std::sregex_iterator(src.begin(), src.end(), re2);
@@ -286,7 +286,7 @@ std::string formatFuncField(const ParsedFunc& f, const TypeContext& ctx) {
     for (size_t i = 0; i < f.params.size(); ++i) {
         const auto& p = f.params[i];
         std::string nm = p.name.empty() ? ("arg" + std::to_string(i + 1)) : p.name;
-        // EmmyLua reserved? Egyszerű escape: `end`, `function`, `local`, ...
+        // EmmyLua reserved? Simple escape: `end`, `function`, `local`, ...
         static const std::unordered_set<std::string> resv = {
             "end","function","local","do","then","if","else","elseif",
             "repeat","until","while","for","return","break","in","not","and","or",
@@ -307,7 +307,7 @@ GenResult generate(const std::string& projectPath,
                    bool               force) {
     GenResult r;
 
-    // 0) Fájl-paths.
+    // 0) File paths.
     fs::path proj(projectPath);
     fs::path luarcDir   = proj / ".luarc";
     fs::path stubFile   = luarcDir / "engine.d.lua";
@@ -349,7 +349,7 @@ GenResult generate(const std::string& projectPath,
         std::istringstream is(src);
         std::string line;
         while (std::getline(is, line)) {
-            // Soron belüli többszöri deklaráció ritka — egysoros minta.
+            // Multiple declarations within a single line are rare — single-line pattern.
             ParsedFunc f;
             if (parseFunction(line, f)) funcs.push_back(std::move(f));
         }
@@ -371,7 +371,7 @@ GenResult generate(const std::string& projectPath,
                    << ctx.knownClasses.size() << " classes.\n\n";
 
         // Class forward-declarations.
-        // Néhány kézzel-hint-elt, hogy XYZ.x/y/z stb. autocomplete legyen.
+        // A few hand-hinted, so XYZ.x/y/z etc. autocomplete works.
         o << "---@class vec3\n"
           << "---@field x number\n"
           << "---@field y number\n"
@@ -391,36 +391,36 @@ GenResult generate(const std::string& projectPath,
           << "---@field w number\n\n"
           << "---@class obj\n\n";
 
-        // Minden ismert (auto-felfedezett) class.
+        // Every known (auto-discovered) class.
         std::vector<std::string> sortedClasses(
             ctx.knownClasses.begin(), ctx.knownClasses.end());
         std::sort(sortedClasses.begin(), sortedClasses.end());
         for (const auto& c : sortedClasses) {
-            // skip ismétlés (vec3/vec2/vec4/quat/obj már fent).
+            // skip duplicates (vec3/vec2/vec4/quat/obj already above).
             if (c == "vec3" || c == "vec2" || c == "vec4" || c == "quat"
                 || c == "obj") continue;
             o << "---@class " << c << "\n";
         }
         o << "\n";
 
-        // C globális namespace (`C.app_swap`, etc.) — `engine_C` class.
+        // C global namespace (`C.app_swap`, etc.) — `engine_C` class.
         o << "---@class engine_C\n";
         for (const auto& f : funcs) {
             o << formatFuncField(f, ctx) << "\n";
         }
         o << "---@type engine_C\nC = {}\n\n";
 
-        // Globális self pointer (Script-komponens-LuaJIT-konvenció).
+        // Global self pointer (Script-component-LuaJIT convention).
         o << "---@type obj\nself = nil\n\n";
 
-        // ---- Math konstansok (runtime pre-loaded a Script-VM-ekben) ------
-        o << "-- ===== Math konstansok =====\n"
+        // ---- Math constants (runtime pre-loaded in the Script-VMs) ------
+        o << "-- ===== Math constants =====\n"
           << "---@type number\ndeg2rad = nil    -- pi / 180\n"
           << "---@type number\nrad2deg = nil    -- 180 / pi\n\n";
 
-        // ---- node helper modul (script_node_api.h-val szinkronban) -------
-        // Ezek runtime-pre-loadolt Lua-shortcutok a Script-VM-ekben.
-        o << "-- ===== `node` helper modul (runtime pre-loaded) =====\n"
+        // ---- node helper module (in sync with script_node_api.h) -------
+        // These are runtime-pre-loaded Lua shortcuts in the Script-VMs.
+        o << "-- ===== `node` helper module (runtime pre-loaded) =====\n"
           << "---@class engine_node\n"
           << "---@field pos          fun(o: obj|nil): vec3|nil\n"
           << "---@field rot          fun(o: obj|nil): vec3|nil\n"
@@ -467,7 +467,7 @@ GenResult generate(const std::string& projectPath,
           << "}\n";
     }
 
-    // 4c) .vscode/settings.json — csak ha még NINCS ott (ne írjuk felül).
+    // 4c) .vscode/settings.json — only if it's NOT there yet (don't overwrite).
     if (!fs::exists(vscodeFile, ec)) {
         fs::create_directories(vscodeDir, ec);
         std::ofstream o(vscodeFile, std::ios::binary | std::ios::trunc);
@@ -479,7 +479,7 @@ GenResult generate(const std::string& projectPath,
               << "    \"Lua.diagnostics.globals\": [\"C\", \"self\", \"node\"]\n"
               << "}\n";
         } else {
-            r.vscodePath.clear();  // failure mark — ne lódítsuk a Console-t
+            r.vscodePath.clear();  // failure mark — don't mislead the Console
         }
     } else {
         r.vscodePath.clear();  // skipped (kept user's edits)

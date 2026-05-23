@@ -1,4 +1,4 @@
-// STL ELŐSZÖR.
+// STL FIRST.
 #include <string>
 #include <vector>
 
@@ -10,7 +10,7 @@ namespace editor {
 
 void ConsolePanel::log(const std::string& msg, LogSeverity sev) {
     lines_.push_back({msg, sev});
-    // Vissza-cap-elés hogy ne nőjjön végtelenül.
+    // Cap-back so it doesn't grow unbounded.
     constexpr size_t kMax = 1000;
     if (lines_.size() > kMax) {
         lines_.erase(lines_.begin(), lines_.begin() + (lines_.size() - kMax));
@@ -26,7 +26,7 @@ void ConsolePanel::draw(EditorApp& /*app*/) {
         ImGui::Checkbox("Auto-scroll", &autoScroll_);
         ImGui::Separator();
 
-        // Phase 3e — Severity-szerinti színek.
+        // Phase 3e — Severity-based colors.
         constexpr ImVec4 kColInfo  = ImVec4(0.85f, 0.85f, 0.85f, 1.0f);
         constexpr ImVec4 kColWarn  = ImVec4(1.00f, 0.85f, 0.30f, 1.0f);
         constexpr ImVec4 kColError = ImVec4(1.00f, 0.40f, 0.40f, 1.0f);

@@ -1,4 +1,4 @@
-// STL ELŐSZÖR.
+// STL FIRST.
 #include <algorithm>
 #include <cctype>
 #include <cstring>
@@ -24,8 +24,8 @@ namespace editor {
 namespace {
 
 // Lowercase + ".XXX" extension extract (compound ext is honored:
-// "foo.prefab.json5" → ".prefab.json5" ha szerepel a listában; egyébként
-// csak az utolsó ".json5").
+// "foo.prefab.json5" → ".prefab.json5" if it's in the list; otherwise
+// just the last ".json5").
 std::string toLower(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(),
                    [](unsigned char c){ return std::tolower(c); });
@@ -37,8 +37,8 @@ bool endsWith(const std::string& p, const std::string& e) {
     return p.compare(p.size() - e.size(), e.size(), e) == 0;
 }
 
-// Asset-type → várható extension-lista. Az ".prefab.json5" előrébb, hogy
-// nyerjen a ".json5" fölött a longest-match elven.
+// Asset-type → expected extension list. ".prefab.json5" comes first so it
+// wins over ".json5" by the longest-match principle.
 const std::unordered_map<std::string, std::vector<std::string>>&
 expectedExtensions() {
     static const std::unordered_map<std::string, std::vector<std::string>> m = {
@@ -55,7 +55,7 @@ expectedExtensions() {
 bool extensionMatches(const std::string& path, const std::string& assetType) {
     auto& m = expectedExtensions();
     auto it = m.find(assetType);
-    if (it == m.end()) return true;   // ismeretlen hint → nem ellenőrizzük
+    if (it == m.end()) return true;   // unknown hint → don't check
     std::string lp = toLower(path);
     for (const auto& e : it->second) {
         if (endsWith(lp, e)) return true;
@@ -100,7 +100,7 @@ void validateNode(obj* node, const std::string& projectRoot,
                     out.push_back(std::move(i));
                 }
 
-                // 2) Project-boundary (warning, csak abs-path-eknél).
+                // 2) Project-boundary (warning, only for abs-paths).
                 if (asset_path::isAbsolute(val) &&
                     !projectRoot.empty() &&
                     !asset_path::isWithinProject(val, projectRoot)) {
@@ -110,7 +110,7 @@ void validateNode(obj* node, const std::string& projectRoot,
                     out.push_back(std::move(i));
                 }
 
-                // 3) File-létezés (ERROR).
+                // 3) File existence (ERROR).
                 std::string abs = asset_path::isAbsolute(val)
                     ? std::string(val)
                     : asset_path::toAbsolute(val, projectRoot);

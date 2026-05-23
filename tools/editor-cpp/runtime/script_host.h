@@ -22,55 +22,55 @@ namespace editor {
 
 class EditorApp;
 
-// Egy aktív Lua VM — per-Script.
+// One active Lua VM — per-Script.
 struct ScriptVM {
     lua_State*  L = nullptr;
     uint64_t    last_mtime = 0;
     bool        load_ok = false;
     std::string last_error;
-    std::string source_path;   // saved a hot-reloadhoz
+    std::string source_path;   // saved for hot-reload
 };
 
-// Per-EditorApp ScriptHost. A komponens-node-ot kulcsként használja egy
-// `unordered_map`-ben; a VM-ek izoláltak (script_init_env(SCRIPT_LUA) → fresh
-// lua_State + custom-package-loader). Hot-reload mtime-poll, hiba esetén
+// Per-EditorApp ScriptHost. Uses the component-node as a key in an
+// `unordered_map`; the VMs are isolated (script_init_env(SCRIPT_LUA) → fresh
+// lua_State + custom-package-loader). Hot-reload mtime-poll, on error
 // Console-log + Script.enabled = 0.
 class ScriptHost {
 public:
     explicit ScriptHost(EditorApp& app) : app_(app) {}
     ~ScriptHost() { unloadAll(); }
 
-    // Egy Script-node-ra: lua_State, engine.ffi cdef, file load, on_init.
-    // Visszatér: success.
+    // For a Script-node: lua_State, engine.ffi cdef, file load, on_init.
+    // Returns: success.
     bool loadScript(obj* scriptNode);
 
-    // Lekapcsolja a script-et (lua_close + map.erase).
+    // Disables the script (lua_close + map.erase).
     void unloadScript(obj* scriptNode);
 
-    // Lua callback hívás traceback-wrapper-rel. `dt < 0` → 0 argumentum,
-    // egyébként `dt` átadása `on_update`-szerű függvénynek.
-    // Visszatér: success. Hiba esetén Console-log + Script.enabled = 0.
+    // Lua callback call with traceback-wrapper. `dt < 0` → 0 arguments,
+    // otherwise pass `dt` to an `on_update`-like function.
+    // Returns: success. On error Console-log + Script.enabled = 0.
     bool callFn(obj* scriptNode, const char* fnName, float dt);
 
-    // Manual reload (Inspector [Reload] gomb). Auto-reload mtime-poll
-    // a tickAll-ban.
+    // Manual reload (Inspector [Reload] button). Auto-reload mtime-poll
+    // happens in tickAll.
     bool reloadScript(obj* scriptNode);
 
-    // Play-mode lifecycle. Snapshot-safe: minden traverz előtt vector-be
-    // gyűjti a Script-node-okat, hogy a Lua-mutáció (obj_attach/detach)
-    // ne zavarja az iterációt.
+    // Play-mode lifecycle. Snapshot-safe: before every traversal it
+    // collects the Script-nodes into a vector, so that Lua-mutation
+    // (obj_attach/detach) doesn't disturb the iteration.
     void startAll();
     void stopAll();
     void tickAll(float dt);     // on_update + mtime-poll
-    void drawAll();              // on_draw (csak GamePanel-ben hívni!)
+    void drawAll();              // on_draw (only call inside GamePanel!)
 
     void unloadAll();
 
-    // Phase 6b — Inspector lekérdezés. Visszaadja a node-hoz tartozó VM
-    // `last_error` mezőjét (üres string ha nincs VM vagy nincs hiba).
+    // Phase 6b — Inspector query. Returns the `last_error` field of the
+    // VM belonging to the node (empty string if there's no VM or no error).
     std::string lastErrorOf(obj* scriptNode) const;
 
-    // true ha a node-hoz létezik aktív VM (loadScript sikerült).
+    // true if an active VM exists for the node (loadScript succeeded).
     bool hasVm(obj* scriptNode) const;
 
 private:

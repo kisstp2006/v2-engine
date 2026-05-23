@@ -1,0 +1,851 @@
+// STL ELŐSZÖR.
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <system_error>
+#include <utility>
+#include <vector>
+
+#include "engine.h"
+#include <cimguizmo/cimguizmo.h>
+
+#include "editor_app.h"
+#include "panel_registry.h"
+
+#include "../core/folder_picker.h"
+#include "../core/file_picker.h"
+#include "../core/events.h"
+#include "../core/process_launcher.h"
+#include "../core/asset_path.h"
+#include "../panels/panel.h"
+#include "../panels/console_panel.h"
+#include "../components/components_api.h"
+#include "../persistence/scene_io.h"
+#include "../runtime/script_host.h"
+#include "../runtime/cook_runner.h"
+#include "../runtime/asset_validator.h"
+#include "../runtime/ffi_to_emmylua.h"
+#include "../scene/scene_helpers.h"
+
+namespace editor {
+
+EditorApp::EditorApp(std::string projectPath)
+    : projectPath_(std::move(projectPath)) {
+    buildPanels();
+    wireUp();
+}
+
+EditorApp::~EditorApp() = default;
+
+void EditorApp::buildPanels() {
+    // Registry-ből építjük — minden panel a saját .cpp végén
+    // REGISTER_PANEL(Type, order)-rel regisztrál magától.
+    for (const auto& d : PanelRegistry::all()) {
+        panels_.emplace_back(d.factory());
+    }
+    // Pointer-cache a Console-ra a bus dispatcher számára.
+    for (auto& p : panels_) {
+        if (p->id() == "console") {
+            console_ = static_cast<ConsolePanel*>(p.get());
+            break;
+        }
+    }
+}
+
+std::string EditorApp::makeRelativeIfInside(const char* inputPath) {
+    if (!inputPath || !*inputPath) return {};
+    // Ha már relatív, hagyjuk békén.
+    if (!asset_path::isAbsolute(inputPath)) return inputPath;
+    // Abs + projekten kívül → kéznél tartjuk + warning.
+    if (!asset_path::isWithinProject(inputPath, projectPath_)) {
+        bus_.emit(kEvtLogWarn,
+            std::string("[Asset] outside project, abs-path kept: ") + inputPath);
+        return inputPath;
+    }
+    return asset_path::toProjectRelative(inputPath, projectPath_);
+}
+
+obj* EditorApp::ensureRoot() {
+    if (scene_.root()) return scene_.root();
+    obj* defaultRoot = editor_obj_new_scene("Scene");
+    scene_.replaceRoot(defaultRoot);   // emit kEvtSceneReplaced
+    if (console_) {
+        console_->log("[Scene] no root was loaded, created default 'Scene'");
+    }
+    return defaultRoot;
+}
+
+obj* EditorApp::createEmpty(obj* parent) {
+    obj* p = parent ? parent : ensureRoot();
+    if (!p) return nullptr;
+    obj* n = editor_obj_new_transform(p, "GameObject");
+    selection_.setPrimary(n);
+    commands_.execute(std::make_unique<AddNodeCommand>(p, n, "Add Empty"));
+    if (console_) {
+        console_->log(std::string("Created: ") +
+                      (obj_name(n) ? obj_name(n) : "GameObject"));
+    }
+    return n;
+}
+
+obj* EditorApp::createMesh(const char* model_path, obj* parent) {
+    obj* p = parent ? parent : ensureRoot();
+    if (!p) return nullptr;
+    std::string rel = makeRelativeIfInside(model_path);
+    obj* n = editor_obj_new_mesh_renderer(p, "Mesh", rel.c_str());
+    selection_.setPrimary(n);
+    commands_.execute(std::make_unique<AddNodeCommand>(p, n, "Add Mesh"));
+    if (console_) {
+        std::string msg = "Created: Mesh";
+        if (!rel.empty()) { msg += " ("; msg += rel; msg += ")"; }
+        console_->log(msg);
+    }
+    return n;
+}
+
+obj* EditorApp::createSprite(const char* texture_path, obj* parent) {
+    obj* p = parent ? parent : ensureRoot();
+    if (!p) return nullptr;
+    std::string rel = makeRelativeIfInside(texture_path);
+    obj* n = editor_obj_new_sprite_renderer(p, "Sprite", rel.c_str());
+    selection_.setPrimary(n);
+    commands_.execute(std::make_unique<AddNodeCommand>(p, n, "Add Sprite"));
+    if (console_) {
+        std::string msg = "Created: Sprite";
+        if (!rel.empty()) { msg += " ("; msg += rel; msg += ")"; }
+        console_->log(msg);
+    }
+    return n;
+}
+
+void EditorApp::saveScene() {
+    if (lastSavedPath_.empty()) { saveSceneAs(); return; }
+    std::string json = SceneIO::saveTree(scene_.root());
+    int ok = file_write(lastSavedPath_.c_str(), json.c_str(), (int)json.size());
+    if (ok) {
+        isDirty_ = false;
+        bus_.emit(kEvtSceneDirty, false);
+    }
+    if (console_) {
+        console_->log(std::string(ok ? "[Scene] saved: " : "[Scene] save failed: ")
+                      + lastSavedPath_);
+    }
+}
+
+void EditorApp::saveSceneAs() {
+    std::string path = pickFile("Save Scene", "json5", true);
+    if (path.empty()) return;
+
+    std::string json = SceneIO::saveTree(scene_.root());
+    int ok = file_write(path.c_str(), json.c_str(), (int)json.size());
+    if (ok) {
+        lastSavedPath_ = path;
+        isDirty_ = false;
+        bus_.emit(kEvtSceneDirty, false);
+    }
+    if (console_) {
+        console_->log(std::string(ok ? "[Scene] saved: " : "[Scene] save failed: ")
+                      + path);
+    }
+}
+
+extern "C" {
+extern char apptitle[128];   // motor `game_app2.h:60` globális buffer
+}
+
+void EditorApp::refreshWindowTitle() {
+    const char* sceneName = "untitled";
+    if (!lastSavedPath_.empty()) {
+        // basename
+        size_t s1 = lastSavedPath_.find_last_of('/');
+        size_t s2 = lastSavedPath_.find_last_of('\\');
+        size_t s  = (s1 == std::string::npos) ? s2
+                   : (s2 == std::string::npos) ? s1
+                   : (s1 > s2 ? s1 : s2);
+        sceneName = (s == std::string::npos)
+                    ? lastSavedPath_.c_str()
+                    : lastSavedPath_.c_str() + s + 1;
+    }
+    snprintf(apptitle, sizeof(apptitle), "%s%s - editor-cpp [%s]",
+             sceneName, isDirty_ ? "*" : "",
+             projectPath_.empty() ? "no project" : projectPath_.c_str());
+}
+
+void EditorApp::openScene() {
+    std::string path = pickFile("Open Scene", "json5", false);
+    if (path.empty()) return;
+    openScene(path);
+}
+
+void EditorApp::openScene(const std::string& path) {
+    int size = 0;
+    char* content = file_read(path.c_str(), &size);
+    if (!content) {
+        if (console_) console_->log(std::string("[Scene] read failed: ") + path);
+        return;
+    }
+    // Phase 4b — auto-migration: a régi abs path-os scene-ek mezőit
+    // relatívra konvertáljuk load közben.
+    LoadResult r = SceneIO::loadTreeDetailed(std::string(content), projectPath_);
+    if (console_) {
+        for (const auto& e : r.errors) {
+            console_->log(std::string("[Scene] ") + e);
+        }
+        console_->log("[Scene] open: " + std::to_string(r.created) + " created, "
+                      + std::to_string(r.failed) + " failed → " + path);
+        if (r.migrated_paths > 0) {
+            console_->log("[Scene] migrated " + std::to_string(r.migrated_paths) +
+                          " abs-paths to project-relative — Save to persist");
+        }
+    }
+    if (!r.root) return;
+    scene_.replaceRoot(r.root);   // kEvtSceneReplaced → selection sanitize
+    lastSavedPath_ = path;
+    // Ha történt path-migration → dirty (felhasználó látja a *-ot, és Save-zheti).
+    isDirty_ = (r.migrated_paths > 0);
+    bus_.emit(kEvtSceneDirty, isDirty_);
+}
+
+obj* EditorApp::createTilemap(const char* tmx_path, obj* parent) {
+    obj* p = parent ? parent : ensureRoot();
+    if (!p) return nullptr;
+    std::string rel = makeRelativeIfInside(tmx_path);
+    obj* n = editor_obj_new_tilemap_ref(p, "Tilemap", rel.c_str());
+    selection_.setPrimary(n);
+    commands_.execute(std::make_unique<AddNodeCommand>(p, n, "Add Tilemap"));
+    if (console_) {
+        std::string msg = "Created: Tilemap";
+        if (!rel.empty()) { msg += " ("; msg += rel; msg += ")"; }
+        console_->log(msg);
+    }
+    return n;
+}
+
+obj* EditorApp::createLight(int type, obj* parent) {
+    obj* p = parent ? parent : ensureRoot();
+    if (!p) return nullptr;
+    const char* tname = (type == 0) ? "Directional Light"
+                      : (type == 1) ? "Point Light"
+                      : (type == 2) ? "Spot Light"
+                      : "Light";
+    obj* n = editor_obj_new_light_ref(p, tname, type);
+    selection_.setPrimary(n);
+    commands_.execute(std::make_unique<AddNodeCommand>(p, n, "Add Light"));
+    if (console_) console_->log(std::string("Created: ") + tname);
+    return n;
+}
+
+obj* EditorApp::createCamera(obj* parent) {
+    obj* p = parent ? parent : ensureRoot();
+    if (!p) return nullptr;
+    obj* n = editor_obj_new_camera_ref(p, "Camera");
+    selection_.setPrimary(n);
+    commands_.execute(std::make_unique<AddNodeCommand>(p, n, "Add Camera"));
+    if (console_) console_->log("Created: Camera");
+    return n;
+}
+
+obj* EditorApp::createAudioSource(const char* clip_path, obj* parent) {
+    obj* p = parent ? parent : ensureRoot();
+    if (!p) return nullptr;
+    std::string rel = makeRelativeIfInside(clip_path);
+    obj* n = editor_obj_new_audio_source(p, "AudioSource", rel.c_str());
+    selection_.setPrimary(n);
+    commands_.execute(std::make_unique<AddNodeCommand>(p, n, "Add AudioSource"));
+    if (console_) {
+        std::string msg = "Created: AudioSource";
+        if (!rel.empty()) { msg += " ("; msg += rel; msg += ")"; }
+        console_->log(msg);
+    }
+    return n;
+}
+
+void EditorApp::saveSelectedAsPrefab() {
+    obj* node = selection_.primary();
+    if (!node) {
+        if (console_) console_->log("[Prefab] no selection");
+        return;
+    }
+    std::string path = pickFile("Save Prefab", "prefab.json5", true);
+    if (path.empty()) return;
+    std::string json = SceneIO::saveSubtree(node);
+    int ok = file_write(path.c_str(), json.c_str(), (int)json.size());
+    if (console_) {
+        console_->log(std::string(ok ? "[Prefab] saved: " : "[Prefab] save failed: ")
+                      + path);
+    }
+}
+
+ScriptHost& EditorApp::scriptHost() {
+    if (!scriptHost_) scriptHost_ = std::make_unique<ScriptHost>(*this);
+    return *scriptHost_;
+}
+
+CookRunner& EditorApp::cookRunner() {
+    if (!cookRunner_)
+        cookRunner_ = std::make_unique<CookRunner>(*this, mainQueue_);
+    return *cookRunner_;
+}
+
+namespace {
+
+// Phase 5a — assets/ alatti összes fájl absz-path-listája (rejtett-prefixű,
+// már cookolt fájlok kihagyva).
+std::vector<std::string> collectAssetFiles(const std::string& projectPath) {
+    std::vector<std::string> out;
+    if (projectPath.empty()) return out;
+    namespace fs = std::filesystem;
+    fs::path assets = fs::path(projectPath) / "assets";
+    std::error_code ec;
+    if (!fs::is_directory(assets, ec)) return out;
+
+    for (auto it = fs::recursive_directory_iterator(assets, ec);
+         it != fs::recursive_directory_iterator(); ++it) {
+        if (ec) break;
+        if (!it->is_regular_file(ec)) continue;
+        std::string name = it->path().filename().string();
+        if (!name.empty() && name[0] == '.') continue;  // skip cooked cache
+        out.push_back(it->path().string());
+    }
+    return out;
+}
+
+}  // namespace
+
+namespace {
+
+// Phase 5c — issue-listából Console-log szétdobás. Severity szerint
+// kEvtLogInfo/Warn/Error → színes a Console-ban.
+void logIssues(EditorApp& app, const std::vector<AssetIssue>& issues) {
+    for (const auto& i : issues) {
+        std::string line = std::string("[Validation] ") + i.typeName + " '" +
+                           i.nodeName + "' " + i.fieldName + " = \"" +
+                           i.path + "\" → " + i.reason;
+        const char* key = (i.level == AssetIssueLevel::Error) ? kEvtLogError
+                        : (i.level == AssetIssueLevel::Warning) ? kEvtLogWarn
+                                                                : kEvtLogInfo;
+        app.bus().emit(key, line);
+    }
+}
+
+}  // namespace
+
+void EditorApp::generateLuaStubs(bool force) {
+    if (projectPath_.empty()) {
+        bus_.emit(kEvtLogWarn, std::string("[LuaIDE] no project loaded"));
+        return;
+    }
+    // A motor `engine.ffi`-je a v2 repo `code/game/embed/`-jében van —
+    // editor-cpp.exe CWD-jéhez képest "code/game/embed/engine.ffi".
+    // (A ScriptHost is így olvassa: script_host.cpp:36.)
+    std::string ffiPath = "code/game/embed/engine.ffi";
+    auto r = ffi_to_emmylua::generate(projectPath_, ffiPath, force);
+    if (!r.ok) {
+        bus_.emit(kEvtLogError, std::string("[LuaIDE] ") + r.error);
+        return;
+    }
+    char buf[256];
+    snprintf(buf, sizeof(buf),
+        "[LuaIDE] generated: %d functions, %d classes → %s",
+        r.functions, r.classes, r.stubPath.c_str());
+    bus_.emit(kEvtLogInfo, std::string(buf));
+    bus_.emit(kEvtLogInfo, std::string("[LuaIDE] config: ") + r.configPath);
+    if (!r.vscodePath.empty()) {
+        bus_.emit(kEvtLogInfo, std::string("[LuaIDE] vscode: ") + r.vscodePath);
+    }
+}
+
+void EditorApp::runAssetValidation() {
+    auto issues = AssetValidator::validate(*this);
+    int errs = AssetValidator::countErrors(issues);
+    int wrns = AssetValidator::countWarnings(issues);
+    logIssues(*this, issues);
+    std::string summary = std::string("[Validation] ") +
+        std::to_string(errs) + " errors, " +
+        std::to_string(wrns) + " warnings (" +
+        std::to_string(issues.size()) + " total)";
+    bus_.emit(errs > 0 ? kEvtLogError : kEvtLogInfo, summary);
+}
+
+void EditorApp::startCookInPlaceAllAssets() {
+    if (projectPath_.empty()) {
+        bus_.emit(kEvtLogWarn, std::string("[Cook] no project loaded"));
+        return;
+    }
+    std::vector<std::string> paths = collectAssetFiles(projectPath_);
+    if (paths.empty()) {
+        bus_.emit(kEvtLogWarn,
+            std::string("[Cook] no assets to cook under: ") + projectPath_);
+        return;
+    }
+    // Phase 5c — pre-cook validation. Error esetén modal prompt, cook defer.
+    auto issues = AssetValidator::validate(*this);
+    logIssues(*this, issues);
+    int errs = AssetValidator::countErrors(issues);
+    if (errs > 0) {
+        cookPrompt_.kind          = PendingCookKind::InPlace;
+        cookPrompt_.paths         = std::move(paths);
+        cookPrompt_.zipPath.clear();
+        cookPrompt_.issues        = std::move(issues);
+        cookPrompt_.openRequested = true;
+        return;
+    }
+    if (!cookRunner().startCookInPlace(std::move(paths))) {
+        bus_.emit(kEvtLogWarn,
+            std::string("[Cook] a cook job is already running"));
+    }
+}
+
+void EditorApp::startBuildCookZip() {
+    if (projectPath_.empty()) {
+        bus_.emit(kEvtLogWarn, std::string("[Cook] no project loaded"));
+        return;
+    }
+    std::string zip = pickFile("Build cook.zip", "zip", true);
+    if (zip.empty()) return;
+    std::vector<std::string> paths = collectAssetFiles(projectPath_);
+    if (paths.empty()) {
+        bus_.emit(kEvtLogWarn,
+            std::string("[Cook] no assets to cook under: ") + projectPath_);
+        return;
+    }
+    auto issues = AssetValidator::validate(*this);
+    logIssues(*this, issues);
+    int errs = AssetValidator::countErrors(issues);
+    if (errs > 0) {
+        cookPrompt_.kind          = PendingCookKind::BuildZip;
+        cookPrompt_.paths         = std::move(paths);
+        cookPrompt_.zipPath       = std::move(zip);
+        cookPrompt_.issues        = std::move(issues);
+        cookPrompt_.openRequested = true;
+        return;
+    }
+    if (!cookRunner().startBuildZip(std::move(paths), std::move(zip))) {
+        bus_.emit(kEvtLogWarn,
+            std::string("[Cook] a cook job is already running"));
+    }
+}
+
+void EditorApp::requestCookCancel() {
+    if (cookRunner_) cookRunner_->requestCancel();
+}
+
+void EditorApp::drawCookValidationPopup() {
+    // Egyszer-frame OpenPopup trigger.
+    if (cookPrompt_.openRequested) {
+        ImGui::OpenPopup("Cook validation issues");
+        cookPrompt_.openRequested = false;
+    }
+
+    // A modal mindig megpróbál renderelni — ha NEM nyitott, BeginPopupModal
+    // azonnal false-t ad vissza, és a tartalom nem fut.
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(420, 200), ImVec2(900, 600));
+
+    if (ImGui::BeginPopupModal("Cook validation issues", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        int errs = AssetValidator::countErrors(cookPrompt_.issues);
+        int wrns = AssetValidator::countWarnings(cookPrompt_.issues);
+        ImGui::TextColored(ImVec4(1.0f, 0.40f, 0.40f, 1.0f),
+            "Found %d errors, %d warnings.", errs, wrns);
+        ImGui::TextDisabled("Cooking may produce broken or missing assets.");
+        ImGui::Separator();
+
+        if (ImGui::BeginChild("##cook_issues",
+                              ImVec2(600, 240), true,
+                              ImGuiWindowFlags_HorizontalScrollbar)) {
+            for (const auto& i : cookPrompt_.issues) {
+                ImVec4 col = (i.level == AssetIssueLevel::Error)
+                    ? ImVec4(1.0f, 0.40f, 0.40f, 1.0f)
+                    : (i.level == AssetIssueLevel::Warning)
+                        ? ImVec4(1.0f, 0.85f, 0.30f, 1.0f)
+                        : ImVec4(0.85f, 0.85f, 0.85f, 1.0f);
+                const char* lvl = (i.level == AssetIssueLevel::Error) ? "ERR"
+                                 : (i.level == AssetIssueLevel::Warning) ? "WRN"
+                                                                         : "INF";
+                ImGui::TextColored(col, "[%s] %s '%s' %s = \"%s\"",
+                    lvl, i.typeName.c_str(), i.nodeName.c_str(),
+                    i.fieldName.c_str(), i.path.c_str());
+                ImGui::TextDisabled("      %s", i.reason.c_str());
+            }
+        }
+        ImGui::EndChild();
+
+        ImGui::Separator();
+        if (ImGui::Button("Continue Cook Anyway")) {
+            switch (cookPrompt_.kind) {
+            case PendingCookKind::InPlace:
+                cookRunner().startCookInPlace(std::move(cookPrompt_.paths));
+                break;
+            case PendingCookKind::BuildZip:
+                cookRunner().startBuildZip(std::move(cookPrompt_.paths),
+                                           std::move(cookPrompt_.zipPath));
+                break;
+            default: break;
+            }
+            cookPrompt_.kind = PendingCookKind::None;
+            cookPrompt_.issues.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) {
+            cookPrompt_.kind = PendingCookKind::None;
+            cookPrompt_.paths.clear();
+            cookPrompt_.zipPath.clear();
+            cookPrompt_.issues.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+}
+
+obj* EditorApp::createScript(const char* script_path, obj* parent) {
+    obj* p = parent ? parent : ensureRoot();
+    if (!p) return nullptr;
+    std::string rel = makeRelativeIfInside(script_path);
+    obj* n = editor_obj_new_script(p, "Script", rel.c_str());
+    selection_.setPrimary(n);
+    commands_.execute(std::make_unique<AddNodeCommand>(p, n, "Add Script"));
+    if (console_) {
+        std::string msg = "Created: Script";
+        if (!rel.empty()) { msg += " ("; msg += rel; msg += ")"; }
+        console_->log(msg);
+    }
+    return n;
+}
+
+void EditorApp::spawnPrefab(const char* path) {
+    if (!path || !*path) return;
+    int size = 0;
+    char* content = file_read(path, &size);
+    if (!content) {
+        if (console_) console_->log(std::string("[Prefab] read failed: ") + path);
+        return;
+    }
+    obj* root = scene_.root() ? scene_.root() : ensureRoot();
+    // Phase 4b — projectPath_ átadva: prefab-on belüli abs-path-ok is rel-re.
+    obj* sub = SceneIO::loadSubtree(root, std::string(content), projectPath_);
+    if (!sub) {
+        if (console_) console_->log(std::string("[Prefab] parse failed: ") + path);
+        return;
+    }
+    selection_.setPrimary(sub);
+    commands_.execute(std::make_unique<AddNodeCommand>(root, sub, "Spawn Prefab"));
+    if (console_) console_->log(std::string("[Prefab] spawned: ") + path);
+}
+
+void EditorApp::wireUp() {
+    // SceneService → bus, hogy a replaceRoot emit-eljen kEvtSceneReplaced-et.
+    scene_.setBus(&bus_);
+    commands_.setBus(&bus_);
+
+    // Phase 3e — severity-aware log dispatcher (3x ugyanaz a kód, csak más sev).
+    auto subscribeLog = [this](const char* key, LogSeverity sev) {
+        bus_.on(key, [this, sev](const std::any& data) {
+            if (!console_) return;
+            if (data.type() == typeid(std::string)) {
+                console_->log(std::any_cast<const std::string&>(data), sev);
+            } else if (data.type() == typeid(const char*)) {
+                console_->log(std::any_cast<const char*>(data), sev);
+            }
+        });
+    };
+    subscribeLog(kEvtLogInfo,  LogSeverity::Info);
+    subscribeLog(kEvtLogWarn,  LogSeverity::Warn);
+    subscribeLog(kEvtLogError, LogSeverity::Error);
+    bus_.on(kEvtSelectionChanged, [this](const std::any& data) {
+        // Új payload: SelectionChange struct. Backward-compat: ha valaki még
+        // raw obj*-t küld, azt is fogjuk.
+        obj* o = nullptr;
+        if (data.type() == typeid(SelectionChange)) {
+            const auto& sc = std::any_cast<const SelectionChange&>(data);
+            o = sc.primary;
+        } else {
+            obj* const* op = std::any_cast<obj*>(&data);
+            o = op ? *op : nullptr;
+        }
+        const char* name = o ? obj_name(o) : "(none)";
+        if (console_) {
+            console_->log(std::string("Selection: ") +
+                          (name ? name : "(unnamed)"));
+        }
+    });
+    // Scene-dirty → flag-set + title-refresh.
+    bus_.on(kEvtSceneDirty, [this](const std::any& data) {
+        bool dirty = true;
+        if (data.type() == typeid(bool)) dirty = std::any_cast<bool>(data);
+        isDirty_ = dirty;
+    });
+
+    // Scene replace → defenzív takarítás (sorrend FONTOS):
+    //   1. ScriptHost: lua_close minden VM-en (obj-pointer-key dangling).
+    //   2. PlayMode audio: az új scene-ben már nincs előző AudioSource node.
+    //   3. SelectionService: a régi pointer-eket eldobja.
+    bus_.on(kEvtSceneReplaced, [this](const std::any& data) {
+        obj* const* op = std::any_cast<obj*>(&data);
+        obj* newRoot = op ? *op : nullptr;
+        if (scriptHost_) scriptHost_->unloadAll();
+        // PlayMode audio cleanup: csak Play-mode-ban van aktív, de defenzív.
+        // (A stopAllAudio publikus volt; ha nem, nem kritikus.)
+        selection_.sanitize(newRoot);
+    });
+    bus_.emit(kEvtLogInfo,
+              std::string("Editor started. Project: ") + projectPath_);
+
+    // Phase 6a — auto-generate Lua API stubs (mtime-cache: no-op ha az
+    // engine.ffi NEM változott a tárolt .luarc/engine.d.lua óta).
+    if (!projectPath_.empty()) {
+        generateLuaStubs(/*force=*/false);
+    }
+}
+
+namespace {
+
+void buildDefaultDockLayout(ImGuiID dockspace_id, ImVec2 size) {
+    ImGui::DockBuilderRemoveNode(dockspace_id);
+    ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
+    ImGui::DockBuilderSetNodeSize(dockspace_id, size);
+
+    ImGuiID main   = dockspace_id;
+    ImGuiID top    = ImGui::DockBuilderSplitNode(main, ImGuiDir_Up,    0.05f, nullptr, &main);
+    ImGuiID left   = ImGui::DockBuilderSplitNode(main, ImGuiDir_Left,  0.18f, nullptr, &main);
+    ImGuiID right  = ImGui::DockBuilderSplitNode(main, ImGuiDir_Right, 0.22f, nullptr, &main);
+    ImGuiID bottom = ImGui::DockBuilderSplitNode(main, ImGuiDir_Down,  0.25f, nullptr, &main);
+
+    ImGui::DockBuilderDockWindow("Toolbar",    top);
+    ImGui::DockBuilderDockWindow("Hierarchy",  left);
+    ImGui::DockBuilderDockWindow("Inspector",  right);
+    ImGui::DockBuilderDockWindow("Project",    bottom);
+    ImGui::DockBuilderDockWindow("Console",    bottom);
+    ImGui::DockBuilderDockWindow("Build",      bottom);
+    ImGui::DockBuilderDockWindow("Scene",      main);
+    ImGui::DockBuilderDockWindow("Scene 2D",   main);
+    ImGui::DockBuilderDockWindow("Game",       main);
+
+    ImGui::DockBuilderFinish(dockspace_id);
+}
+
+}  // namespace
+
+void EditorApp::drawDockHost() {
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->WorkPos);
+    ImGui::SetNextWindowSize(vp->WorkSize);
+    ImGui::SetNextWindowViewport(vp->ID);
+
+    ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoResize   | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoBringToFrontOnFocus |
+        ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoDocking |
+        ImGuiWindowFlags_NoBackground;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::Begin("##EditorDockHost", nullptr, flags);
+    ImGui::PopStyleVar(3);
+
+    ImGuiID dockspace_id = ImGui::GetID("EditorDockSpace");
+    if (needResetLayout_ || ImGui::DockBuilderGetNode(dockspace_id) == nullptr) {
+        buildDefaultDockLayout(dockspace_id, vp->WorkSize);
+        needResetLayout_ = false;
+    }
+
+    ImGui::DockSpace(dockspace_id, ImVec2(0, 0),
+                     ImGuiDockNodeFlags_PassthruCentralNode);
+    ImGui::End();
+}
+
+void EditorApp::drawMenubar() {
+    if (!ImGui::BeginMainMenuBar()) return;
+
+    if (ImGui::BeginMenu("File")) {
+        if (ImGui::MenuItem("Open Scene...", "Ctrl+O")) {
+            openScene();
+        }
+        if (ImGui::MenuItem("Save Scene As...", "Ctrl+Shift+S")) {
+            saveSceneAs();
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Open Project...")) {
+            std::string p = pickFolder("Open Project Folder");
+            if (!p.empty()) {
+                launchEditorWithProject(argv(0), p);
+                quit();
+            }
+        }
+        if (ImGui::MenuItem("Close Project")) {
+            launchEditorWithProject(argv(0), {});
+            quit();
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Exit")) {
+            quit();
+        }
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("Edit")) {
+        if (ImGui::MenuItem("Undo", "Ctrl+Z", false, commands_.canUndo())) {
+            commands_.undo();
+        }
+        if (ImGui::MenuItem("Redo", "Ctrl+Y", false, commands_.canRedo())) {
+            commands_.redo();
+        }
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("View")) {
+        for (auto& p : panels_) {
+            ImGui::MenuItem(p->title().c_str(), nullptr, &p->visible);
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Reset Layout")) {
+            resetDockLayout();
+        }
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("GameObject")) {
+        if (ImGui::MenuItem("Create Empty", "Ctrl+Shift+N")) {
+            createEmpty();
+        }
+        if (ImGui::BeginMenu("3D Object")) {
+            if (ImGui::MenuItem("Mesh (empty path)")) {
+                createMesh("");
+            }
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("2D Object")) {
+            if (ImGui::MenuItem("Sprite (empty path)")) {
+                createSprite("");
+            }
+            if (ImGui::MenuItem("Tilemap (empty path)")) {
+                createTilemap("");
+            }
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Light")) {
+            if (ImGui::MenuItem("Directional")) createLight(0);
+            if (ImGui::MenuItem("Point"))       createLight(1);
+            if (ImGui::MenuItem("Spot"))        createLight(2);
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Camera")) {
+            if (ImGui::MenuItem("Camera")) createCamera();
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Audio")) {
+            if (ImGui::MenuItem("AudioSource (empty path)")) {
+                createAudioSource("");
+            }
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Scripting")) {
+            if (ImGui::MenuItem("Script (empty path)")) {
+                // Unity-mintára: ha van kijelölés, a Script annak child-ja
+                // legyen (a Lua `obj_parent(self)` így az adott GameObject-re
+                // mutat, és olvashatja annak Transform/MeshRenderer pos-át).
+                createScript("", selection_.primary());
+            }
+            ImGui::EndMenu();
+        }
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("Tools")) {
+        const bool cooking = cookRunner_ && cookRunner_->isRunning();
+        if (ImGui::MenuItem("Validate Assets", nullptr, false, !cooking)) {
+            runAssetValidation();
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Cook Assets (In-Place)", nullptr, false, !cooking)) {
+            startCookInPlaceAllAssets();
+        }
+        if (ImGui::MenuItem("Build cook.zip...",      nullptr, false, !cooking)) {
+            startBuildCookZip();
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Cancel Cook", nullptr, false, cooking)) {
+            requestCookCancel();
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Generate Lua API Stubs (force)")) {
+            generateLuaStubs(true);
+        }
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("Window")) {
+        for (auto& p : panels_) {
+            ImGui::MenuItem(p->title().c_str(), nullptr, &p->visible);
+        }
+        ImGui::EndMenu();
+    }
+
+    ImGui::EndMainMenuBar();
+}
+
+void EditorApp::drawFrame() {
+    ImGuizmo_BeginFrame();
+
+    // Phase 5a — background-tasks (cook worker) → main-thread drain.
+    // Itt futnak le a worker által enqueue-zott bus.emit hívások.
+    mainQueue_.drainOnMainThread();
+    if (cookRunner_) cookRunner_->joinIfDone();
+
+    // Play-mode frame-tick: scriptek on_update(dt) + mtime-poll auto-reload.
+    // Edit módban no-op.
+    play_.frameTick(*this, app_delta());
+
+    // Ctrl+Z / Ctrl+Y globális undo/redo. Az ImGui IO-jából olvasunk
+    // hogy ne kelljen a motor-szintű `binding`-be belekapcsolni.
+    if (ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
+            commands_.undo();
+            if (console_) console_->log("[Undo]");
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_Y, false)) {
+            commands_.redo();
+            if (console_) console_->log("[Redo]");
+        }
+    }
+
+    // W / E / R — gizmo-mode (Unity-paritás). Csak akkor ha NEM szövegmező-edit.
+    if (!ImGui::GetIO().KeyCtrl && !ImGui::GetIO().WantTextInput) {
+        if (ImGui::IsKeyPressed(ImGuiKey_W, false)) gizmoOp_ = 7;     // TRANSLATE
+        if (ImGui::IsKeyPressed(ImGuiKey_E, false)) gizmoOp_ = 120;   // ROTATE
+        if (ImGui::IsKeyPressed(ImGuiKey_R, false)) gizmoOp_ = 896;   // SCALE
+    }
+
+    // Ctrl+S — Save Scene gyors-mentés (lastSavedPath-ra vagy saveSceneAs).
+    if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) {
+        saveScene();
+    }
+
+    // Window-title minden frame frissítjük (a `*` modified-indikátor és a
+    // scene-basename érdekes lehet).
+    refreshWindowTitle();
+
+    drawMenubar();
+    drawDockHost();
+    for (auto& p : panels_) {
+        p->draw(*this);
+    }
+
+    // Phase 5c — pre-cook validation modal (felülrétegben).
+    drawCookValidationPopup();
+}
+
+void EditorApp::run() {
+    // Az ESC-quit szándékosan eltávolítva (Phase 3e): a Scene panel freefly-
+    // ben az ESC a cursor-restore-t szolgálja. Kilépéshez: File → Exit,
+    // ablak-close gomb, vagy `quit()`.
+    while (app_swap() && !quit_) {
+        drawFrame();
+    }
+}
+
+}  // namespace editor

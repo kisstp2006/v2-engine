@@ -1,0 +1,88 @@
+# ============================================================================
+# v2 engine + editor — gitignore
+# ============================================================================
+
+# ---- Build outputs (root) --------------------------------------------------
+editor-cpp.exe
+editor-cpp.exp
+editor-cpp.ilk
+editor-cpp.lib
+editor-cpp.obj
+editor-cpp.pdb
+hello.exe
+hello.exp
+hello.ilk
+hello.lib
+hello.obj
+hello.pdb
+vc140.pdb
+
+# ---- Object files (MAKE.bat dumps every translation unit to root) ---------
+*.obj
+*.o
+
+# ---- Date-stamped cache (native-Sat05232026.obj, backend-...) -------------
+native-*.obj
+backend-*.obj
+
+# ---- Cook outputs ---------------------------------------------------------
+cook.zip
+cook*.csv
+
+# ---- Editor auto-generated stubs (per-project, Phase 6a) -------------------
+.luarc/
+.luarc.json
+
+# ---- User-specific editor state (ImGui dock layout, recent projects, ...) -
+.settings.ini
+
+# ---- IDE state ------------------------------------------------------------
+.vs/
+.vscode/
+*.user
+*.suo
+*.sln.cache
+*.opensdf
+*.sdf
+
+# ---- OS junk --------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+$RECYCLE.BIN/
+
+# ---- Editor backup files --------------------------------------------------
+*.swp
+*~
+*.bak
+*.orig
+
+# ---- Build / runtime logs -------------------------------------------------
+*.log
+
+# ---- Engine cook-cache (in-place .X.png hidden-prefix from cook() recipe) -
+# Példa: assets/audio/.foo.mp3 (a motor cook-cache rejtett-prefix fájlokat
+# generál minden cook(path)-hoz). MAKE.bat tidy egyébként törli.
+# A pattern bizonytalan ezért a meglevő egyértelmű kiterjesztéseket fedjük le.
+**/.*.png
+**/.*.jpg
+**/.*.jpeg
+**/.*.tga
+**/.*.bmp
+**/.*.iqm
+**/.*.gltf
+**/.*.glb
+**/.*.fbx
+**/.*.obj
+**/.*.lua
+**/.*.mp3
+**/.*.wav
+**/.*.ogg
+**/.*.flac
+**/.*.mod
+**/.*.xm
+**/.*.s3m
+**/.*.it
+**/.*.tmx
+**/.*.json5

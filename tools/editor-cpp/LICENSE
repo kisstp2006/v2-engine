@@ -2,18 +2,24 @@ GPL-3.0-or-later License
 
 Copyright (C) 2026 tibig
 
-The editor in this directory (`tools/editor-cpp/`) is licensed under
-GNU General Public License v3.0 or later.
+The editor contained in this directory (`tools/editor-cpp/`)
+is licensed under the GNU General Public License v3.0
+or (at your option) any later version.
 
-This means:
-- You can use, study, and modify this code freely.
-- If you distribute modified versions (forks), they MUST also be
-  released under GPL-3.0-or-later (open source).
-- The original author (tibig) retains copyright and may license the
-  same code under different terms (e.g., commercial / closed-source)
-  for their own projects.
+You are free to use, study, modify, and redistribute this code
+under the terms of the GPL.
 
-Contact the author for alternative licensing terms.
+Any distributed modified version of this editor must also be
+licensed under GPL-3.0-or-later and must provide source code
+as required by the license.
+
+The engine/runtime itself is licensed separately under the
+Apache License 2.0.
+
+The original author retains copyright ownership and may offer
+alternative commercial or proprietary licensing terms.
+
+See the LICENSE file for full license text.
 
 ---
 

@@ -7,9 +7,9 @@ Unity-stílusú editor.
 
 | Mappa | Mit ad | License |
 |---|---|---|
-| `code/` | A motor magja (render, audio, input, scene-graph, LuaJIT FFI, reflection) | **MIT** |
-| `ext/` | Backend pluginek (SDL3, OpenAL, ENet, ImGui-glue, FFmpeg-audio, stb.) | **MIT** (lásd egyes alkönyvtárakat) |
-| `demos/` | Példa-játékok és use-case-ek a motor API-jára | **MIT** |
+| `code/` | A motor magja (render, audio, input, scene-graph, LuaJIT FFI, reflection) | **Apache 2.0** |
+| `ext/` | Backend pluginek (SDL3, OpenAL, ENet, ImGui-glue, FFmpeg-audio, stb.) | **Apache 2.0** (lásd egyes alkönyvtárakat) |
+| `demos/` | Példa-játékok és use-case-ek a motor API-jára | **Apache 2.0** |
 | `tools/editor-cpp/` | Unity-stílusú scene-editor (Hierarchy/Inspector/Project/Scene/Game/Console/Build panelekkel) | **GPL-3.0-or-later** |
 
 ## Build
@@ -69,9 +69,10 @@ létre (`project.json5` + `assets/{models,scenes,scripts,prefabs}/`).
 
 ## License notes
 
-- A **motor** (`code/`, `ext/`, `demos/`) MIT alatt — szabadon felhasználható
-  closed-source projektekben is.
-- Az **editor** (`tools/editor-cpp/`) GPL-3.0-or-later alatt — a forkok és
-  származékos művek kötelesek nyitott-forráskódúak maradni. A copyright-
+- A **motor** (`code/`, `ext/`, `demos/`) **Apache License 2.0** alatt —
+  szabadon felhasználható closed-source projektekben is, beleértve a
+  patent-grant védelmet (a "profi open-source" preferált license).
+- Az **editor** (`tools/editor-cpp/`) **GPL-3.0-or-later** alatt — a forkok
+  és származékos művek kötelesek nyitott-forráskódúak maradni. A copyright-
   tulajdonos (tibig) fenntartja a jogot, hogy más license-szel adja ki
   (pl. kereskedelmi / closed-source).

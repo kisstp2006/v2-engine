@@ -25,6 +25,7 @@ private:
     bool        open_       = false;
     bool        created_    = false;
     int         templateIdx_ = 0;     // 0 = 3D, 1 = 2D
+    bool        includeFX_   = true;  // copy bundled PostFX shaders into assets/fx/
     char        nameBuf_[128]    = {};
     char        locationBuf_[1024] = {};
     std::string error_;

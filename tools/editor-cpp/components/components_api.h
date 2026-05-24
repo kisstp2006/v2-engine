@@ -130,6 +130,23 @@ API const char* editor_skybox_sky_path (const struct obj* o);
 API const char* editor_skybox_refl_path(const struct obj* o);
 API const char* editor_skybox_env_path (const struct obj* o);
 
+// New PostFXStack node — scene-wide singleton holding post-process pipeline
+// parameters. The 3D Scene / Game render-walks wrap the world-render in
+// fx_begin/end when this node exists and `enabled` is true.
+// `fx_dir` is project-relative (default "assets/fx") — the shaders live there.
+API struct obj* editor_obj_new_postfx_stack(struct obj* parent, const char* name);
+API int          editor_obj_is_postfx_stack   (const struct obj* o);
+// Read both fields at once. out-pointers may be NULL.
+// out_fx_dir: const char** — pointer to the stored path string (may be NULL).
+API void         editor_postfx_stack_get(const struct obj* o,
+                                         int* out_enabled,
+                                         const char** out_fx_dir);
+// Field-pointer accessors (mutable, for Lua node.postfx_* helpers later).
+API int*   editor_postfx_stack_enabled_addr(struct obj* o);
+API char** editor_postfx_stack_fx_dir_addr (struct obj* o);
+// Read-only string getter (Lua node.postfx_fx_dir helper, later).
+API const char* editor_postfx_stack_fx_dir(const struct obj* o);
+
 // New TextRenderer node — screen-space text overlay (HUD).
 // `pos.x/.y` = viewport pixel position; markup tags in `text` allowed.
 API struct obj* editor_obj_new_text_renderer(struct obj* parent,

@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "../core/event_bus.h"
@@ -66,6 +67,9 @@ public:
     // New Skybox node — scene-wide singleton (environment map background + IBL).
     obj* createSkybox(const char* sky_path = "", obj* parent = nullptr);
 
+    // New PostFXStack node — scene-wide singleton (post-process pipeline).
+    obj* createPostFXStack(obj* parent = nullptr);
+
     // New TextRenderer node — screen-space text overlay.
     obj* createTextRenderer(const char* text = "", obj* parent = nullptr);
 
@@ -118,6 +122,18 @@ public:
     // engine.ffi mtime > stub mtime (mtime-cache).
     void generateLuaStubs(bool force);
 
+    // PostFX — copy bundled `tools/editor-cpp/embed/fx/*.glsl` into the
+    // current project's `assets/fx/`. Skip-existing mode: never clobbers a
+    // user-edited shader file. Console-log: "[FX] imported N / 28 (skipped M)".
+    void importDefaultFXShaders();
+
+    // PostFX — scan `<project>/assets/fx/*.glsl` and feed every NEW shader to
+    // `fx_load_from_mem`. State-tracked: each file is loaded at most once
+    // per editor session (manual restart picks up newly imported shaders).
+    // No-op when no project is loaded or the fx-dir is missing.
+    // Called from the EditorApp ctor and from openScene().
+    void loadProjectFXShaders();
+
 private:
     void buildPanels();
     void wireUp();
@@ -147,6 +163,12 @@ private:
     std::string      projectPath_;
     std::string      lastSavedPath_;     // path after Save Scene (Ctrl+S target)
     bool             isDirty_ = false;   // window-title `*` indicator
+    // PostFX shader names already fed to fx_load_from_mem (dedupe — the
+    // engine-side `fx_load_from_mem` does NOT check for duplicates, unlike
+    // `fx_load` which has its own `set(char*) added`). Stored by filename
+    // only (e.g. "fxBloom.glsl"), not absolute path, so per-project moves
+    // don't re-load duplicates.
+    std::unordered_set<std::string> loadedFXNames_;
     EventBus         bus_;
     MainThreadQueue  mainQueue_;
     SceneService     scene_;

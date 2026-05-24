@@ -17,6 +17,7 @@
 #include "../core/events.h"
 #include "../core/process_launcher.h"
 #include "../core/asset_path.h"
+#include "../core/fx_bundle.h"
 #include "../panels/panel.h"
 #include "../panels/console_panel.h"
 #include "../components/components_api.h"
@@ -33,6 +34,10 @@ EditorApp::EditorApp(std::string projectPath)
     : projectPath_(std::move(projectPath)) {
     buildPanels();
     wireUp();
+    // PostFX shaders: load every `<project>/assets/fx/*.glsl` once at startup
+    // so the engine's `fx_*` API has the passes available the moment a
+    // PostFXStack node turns on. No-op if the project has no assets/fx/.
+    loadProjectFXShaders();
 }
 
 EditorApp::~EditorApp() = default;
@@ -204,6 +209,10 @@ void EditorApp::openScene(const std::string& path) {
     // If path-migration happened → dirty (user sees the *, and can Save).
     isDirty_ = (r.migrated_paths > 0);
     bus_.emit(kEvtSceneDirty, isDirty_);
+    // Pick up any new FX shaders the user dropped into assets/fx/ since
+    // the ctor (e.g. via Tools → Import, or copied in by hand). dedup-set
+    // means already-loaded ones are skipped.
+    loadProjectFXShaders();
 }
 
 obj* EditorApp::createTilemap(const char* tmx_path, obj* parent) {
@@ -265,6 +274,16 @@ obj* EditorApp::createSkybox(const char* sky_path, obj* parent) {
     selection_.setPrimary(n);
     commands_.execute(std::make_unique<AddNodeCommand>(p, n, "Add Skybox"));
     if (console_) console_->log("Created: Skybox");
+    return n;
+}
+
+obj* EditorApp::createPostFXStack(obj* parent) {
+    obj* p = parent ? parent : ensureRoot();
+    if (!p) return nullptr;
+    obj* n = editor_obj_new_postfx_stack(p, "PostFX Stack");
+    selection_.setPrimary(n);
+    commands_.execute(std::make_unique<AddNodeCommand>(p, n, "Add PostFX Stack"));
+    if (console_) console_->log("Created: PostFX Stack");
     return n;
 }
 
@@ -395,6 +414,76 @@ void EditorApp::generateLuaStubs(bool force) {
     bus_.emit(kEvtLogInfo, std::string("[LuaIDE] config: ") + r.configPath);
     if (!r.vscodePath.empty()) {
         bus_.emit(kEvtLogInfo, std::string("[LuaIDE] vscode: ") + r.vscodePath);
+    }
+}
+
+void EditorApp::importDefaultFXShaders() {
+    if (projectPath_.empty()) {
+        bus_.emit(kEvtLogWarn, std::string("[FX] no project loaded"));
+        return;
+    }
+    // Skip-existing mode — never clobber user-edited variants. If the
+    // user wants a fresh copy they can delete the file first.
+    auto r = fx_bundle::copyBundledShaders(projectPath_, /*overwrite=*/false);
+    if (r.source_dir_missing) {
+        bus_.emit(kEvtLogError,
+            std::string("[FX] bundled shader dir not found "
+                        "(tools/editor-cpp/embed/fx/) — is the editor "
+                        "launched from the v2 repo root?"));
+        return;
+    }
+    char buf[160];
+    snprintf(buf, sizeof(buf),
+        "[FX] imported %d / %d  (skipped %d existing)",
+        r.copied, r.total, r.skipped);
+    bus_.emit(kEvtLogInfo, std::string(buf));
+    // Newly-imported shaders are picked up on the next loadProjectFXShaders().
+    loadProjectFXShaders();
+}
+
+void EditorApp::loadProjectFXShaders() {
+    if (projectPath_.empty()) return;
+    namespace fs = std::filesystem;
+    fs::path fxDir = fs::path(projectPath_) / "assets" / "fx";
+    std::error_code ec;
+    if (!fs::is_directory(fxDir, ec)) return;
+
+    // The motor's `fx_load(glob)` uses CWD-relative `file_list` (see
+    // code/sys/sys_file.h:282), so an abs-path glob produces no matches.
+    // Work around it: list with std::filesystem, slurp with `file_read`,
+    // feed each new shader to `fx_load_from_mem`. The motor-side
+    // `postfx_load_from_mem` does NOT dedupe, so we track loaded names
+    // ourselves to be safe on re-entry (Tools → Import, openScene, etc.).
+    int loaded = 0;
+    for (auto& e : fs::directory_iterator(fxDir, ec)) {
+        if (!e.is_regular_file()) continue;
+        if (e.path().extension() != ".glsl") continue;
+        std::string name = e.path().filename().string();
+        if (loadedFXNames_.count(name)) continue;
+
+        std::string abs = e.path().string();
+        int sz = 0;
+        char* content = file_read(abs.c_str(), &sz);
+        if (!content || sz <= 0) continue;
+
+        // `fx_load_from_mem` STRDUPs the nameid for `passfx.name`, so a
+        // stack-local c_str() would be fine — but mirror the engine's
+        // own `fx_load` convention (which keeps a heap STRDUP in the
+        // dedupe-set) so the nameid stays valid for later set-lookup
+        // inside the motor.
+        char* nameHeap = STRDUP(name.c_str());
+        int slot = fx_load_from_mem(nameHeap, content);
+        if (slot >= 0) {
+            loadedFXNames_.insert(std::move(name));
+            ++loaded;
+        }
+    }
+    if (loaded > 0) {
+        char buf[160];
+        snprintf(buf, sizeof(buf),
+            "[FX] loaded %d new shader%s from %s",
+            loaded, loaded == 1 ? "" : "s", fxDir.string().c_str());
+        bus_.emit(kEvtLogInfo, std::string(buf));
     }
 }
 
@@ -783,6 +872,7 @@ void EditorApp::drawMenubar() {
         if (ImGui::BeginMenu("Environment")) {
             if (ImGui::MenuItem("Fog")) createFogSettings();
             if (ImGui::MenuItem("Skybox (empty path)")) createSkybox("");
+            if (ImGui::MenuItem("PostFX Stack")) createPostFXStack();
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("UI")) {
@@ -823,6 +913,16 @@ void EditorApp::drawMenubar() {
         ImGui::Separator();
         if (ImGui::MenuItem("Cancel Cook", nullptr, false, cooking)) {
             requestCookCancel();
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Import Default FX Shaders")) {
+            importDefaultFXShaders();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "Copies the 28 bundled GLSL post-processing\n"
+                "shaders into <project>/assets/fx/.\n"
+                "Existing files are NOT overwritten — your edits are safe.");
         }
         ImGui::Separator();
         if (ImGui::MenuItem("Generate Lua API Stubs (force)")) {

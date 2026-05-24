@@ -122,6 +122,24 @@ static obj* findSkyboxNode(obj* node) {
     return nullptr;
 }
 
+static obj* findPostFXStack(obj* node) {
+    if (!node) return nullptr;
+    if (editor_obj_is_postfx_stack(node)) return node;
+    int n = editor_obj_child_count(node);
+    for (int i = 0; i < n; ++i) {
+        obj* r = findPostFXStack(editor_obj_child_at(node, i));
+        if (r) return r;
+    }
+    return nullptr;
+}
+
+static bool isFXActive(obj* fxNode) {
+    if (!fxNode) return false;
+    int enabled = 0;
+    editor_postfx_stack_get(fxNode, &enabled, nullptr);
+    return enabled != 0;
+}
+
 // HUD-overlay helpers — duplicated in game_panel.cpp; small enough that a
 // shared header would be over-engineered for two call sites.
 static void collectTextRenderers_scene(obj* node, std::vector<obj*>& out) {
@@ -384,9 +402,6 @@ void ScenePanel::renderScene(int w, int h, bool inputAllowed, EditorApp& app) {
 
     camera_enable(&cam_);
 
-    ddraw_grid(0);
-    ddraw_flush();
-
     // Spatial audio listener pos = the Scene editor-camera position (in Play mode).
     float listenerPos[3] = { cam_.position.x, cam_.position.y, cam_.position.z };
     app.play().updateAudio(app, listenerPos);
@@ -405,6 +420,22 @@ void ScenePanel::renderScene(int w, int h, bool inputAllowed, EditorApp& app) {
     // Skybox: resolve from the scene's Skybox node (cached + mtime-poll), render
     // background if its render_background flag is on.
     skybox_t* sky = resolveSkybox(app);
+
+    // PostFX: same flow as game_panel — fx_begin/end wraps the world-render.
+    // fbo_unbind() inside fx_end() pops back to fbo_.id via the motor's
+    // bind-stack, so the FX-applied result lands in the editor FBO. Passing
+    // 0/0 makes fx_end use its own internal color/depth as the first-pass
+    // source (= the image we just drew with fx_begin's fbo bound).
+    obj* fxNode = findPostFXStack(app.scene().root());
+    const bool fx_active = isFXActive(fxNode);
+
+    if (fx_active) fx_begin_res(w, h);
+
+    // Grid is an editor world-element; it's expected to be affected by FX
+    // (a Bloom pass should bloom the grid too), so it stays inside fx_begin.
+    ddraw_grid(0);
+    ddraw_flush();
+
     if (sky) {
         obj* skyNode = findSkyboxNode(app.scene().root());
         int render_bg = 1;
@@ -416,8 +447,6 @@ void ScenePanel::renderScene(int w, int h, bool inputAllowed, EditorApp& app) {
 
     // 3D label pass — Text3DRenderer nodes drawn in world-space via ddraw_text.
     drawText3DOverlays_scene(app.scene().root());
-    // HUD pass — TextRenderer nodes drawn in 2D viewport-pixel space.
-    drawTextOverlays_scene(app.scene().root());
 
     // 4) Script `on_draw` callbacks (only in Play-mode). We also show in the
     // editor Scene panel so that script-effects are visible immediately
@@ -427,6 +456,13 @@ void ScenePanel::renderScene(int w, int h, bool inputAllowed, EditorApp& app) {
         app.scriptHost().drawAll();
         ddraw_flush();
     }
+
+    if (fx_active) fx_end(0, 0);
+
+    // HUD pass — TextRenderer nodes drawn in 2D viewport-pixel space.
+    // Intentionally AFTER fx_end: a Bloom/CRT/etc effect on UI text usually
+    // looks like a render bug, so the HUD overlay stays FX-free.
+    drawTextOverlays_scene(app.scene().root());
 
     fbo_unbind();
 }

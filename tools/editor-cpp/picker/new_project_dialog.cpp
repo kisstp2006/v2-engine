@@ -7,6 +7,7 @@
 
 #include "engine.h"
 #include "../core/folder_picker.h"
+#include "../core/fx_bundle.h"
 #include "new_project_dialog.h"
 
 namespace editor {
@@ -74,6 +75,17 @@ void NewProjectDialog::doCreate() {
       << "}\n";
     f.close();
 
+    // Optional: drop the bundled 28 PostFX shaders into assets/fx/. The
+    // user can untick the wizard checkbox to start with an empty fx-dir.
+    // Wizard mode = overwrite (fresh project, no collision possible).
+    if (includeFX_) {
+        (void)fx_bundle::copyBundledShaders(projectRoot.string(),
+                                            /*overwrite=*/true);
+        // Non-fatal: a missing embed/fx/ source dir or partial copy still
+        // produces a usable project. The Console output happens later in
+        // EditorApp once it's running on this project, not here.
+    }
+
     createdPath_ = projectRoot.string();
     created_     = true;
     open_        = false;
@@ -127,6 +139,14 @@ void NewProjectDialog::update() {
     ImGui::RadioButton("3D scene", &templateIdx_, 0);
     ImGui::SameLine();
     ImGui::RadioButton("2D scene", &templateIdx_, 1);
+
+    ImGui::Dummy(ImVec2(0, 6));
+    ImGui::Checkbox("Include default PostFX shaders", &includeFX_);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Copies the 28 bundled GLSL post-processing\n"
+                          "shaders into <project>/assets/fx/.\n"
+                          "You can re-import them later from the Tools menu.");
+    }
 
     if (!error_.empty()) {
         ImGui::Dummy(ImVec2(0, 6));

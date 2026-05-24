@@ -89,6 +89,29 @@ static obj* findSkyboxNode(obj* node) {
     return nullptr;
 }
 
+// Depth-first lookup of the first PostFXStack in the scene (NULL if none).
+static obj* findPostFXStack(obj* node) {
+    if (!node) return nullptr;
+    if (editor_obj_is_postfx_stack(node)) return node;
+    int n = editor_obj_child_count(node);
+    for (int i = 0; i < n; ++i) {
+        obj* r = findPostFXStack(editor_obj_child_at(node, i));
+        if (r) return r;
+    }
+    return nullptr;
+}
+
+// Resolve PostFXStack to a single "is the FX pipeline active?" boolean.
+// Active = (PostFXStack node exists) AND (`enabled` field is non-zero).
+// Note: fx_begin/end further short-circuit to no-op if 0 passes are enabled,
+// so calling them with `true` here is safe even on a fresh stack.
+static bool isFXActive(obj* fxNode) {
+    if (!fxNode) return false;
+    int enabled = 0;
+    editor_postfx_stack_get(fxNode, &enabled, nullptr);
+    return enabled != 0;
+}
+
 // Collect TextRenderer nodes for the HUD-overlay pass.
 static void collectTextRenderers(obj* node, std::vector<obj*>& out) {
     if (!node) return;
@@ -313,6 +336,18 @@ void GamePanel::renderWithCamera(obj* cameraNode, int w, int h, EditorApp& app) 
     // Skybox: resolve from the scene's Skybox node (cached + mtime-poll), render
     // background if its render_background flag is on.
     skybox_t* sky = resolveSkybox(app);
+
+    // PostFX: wrap the world-render in fx_begin/end. fbo_unbind() inside
+    // fx_end() pops back to fbo_.id (motor uses a bind-stack), so the
+    // FX-applied result lands in the editor FBO automatically. Passing 0/0
+    // makes fx_end use its own internal color/depth as the first-pass input
+    // (which is what we just rendered into during fx_begin), instead of
+    // sampling the editor FBO's textures (which would skip the world-render).
+    obj* fxNode = findPostFXStack(app.scene().root());
+    const bool fx_active = isFXActive(fxNode);
+
+    if (fx_active) fx_begin_res(w, h);
+
     if (sky) {
         obj* skyNode = findSkyboxNode(app.scene().root());
         int render_bg = 1;
@@ -324,8 +359,6 @@ void GamePanel::renderWithCamera(obj* cameraNode, int w, int h, EditorApp& app) 
 
     // 3D label pass — Text3DRenderer nodes drawn in world-space via ddraw_text.
     drawText3DOverlays(app.scene().root());
-    // HUD pass — TextRenderer nodes drawn in 2D viewport-pixel space.
-    drawTextOverlays(app.scene().root());
 
     // Script on_draw — at this point the FBO and camera are already bound, so the Lua
     // `C.ddraw_*` / `C.model_render` draws here. The ddraw_flush is needed
@@ -334,6 +367,13 @@ void GamePanel::renderWithCamera(obj* cameraNode, int w, int h, EditorApp& app) 
         app.scriptHost().drawAll();
         ddraw_flush();
     }
+
+    if (fx_active) fx_end(0, 0);
+
+    // HUD pass — TextRenderer nodes drawn in 2D viewport-pixel space.
+    // Intentionally AFTER fx_end: a Bloom/CRT/etc effect on UI text usually
+    // looks like a render bug, so the HUD overlay stays FX-free.
+    drawTextOverlays(app.scene().root());
 
     fbo_unbind();
 }

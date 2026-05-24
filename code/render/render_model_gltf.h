@@ -330,16 +330,21 @@ bool model_load_meshes_gltf(cgltf_data *data, iqm_t *q, model_t *m, int flags) {
             }
         }
 
-        // Empirical Y-flip: every glTF model renders upside-down in the v2
-        // pipeline without this. IQM models compensate via their per-model
-        // pivot (e.g. demos/13-model.c uses eulerq(0,-90,0) on .pivot); for
-        // glTF we bake it into the vertex bind here so MeshRenderer pivots
-        // stay identity by default. The negated Y row applies to both
-        // static and skinned meshes (above_skin world is already in `world`).
-        world[1]  = -world[1];
-        world[5]  = -world[5];
-        world[9]  = -world[9];
-        world[13] = -world[13];
+        // Y-flip policy:
+        //   - STATIC mesh: bake the Y-flip into the vertex bind here so the
+        //     MeshRenderer pivot can stay identity (IQM convention).
+        //   - SKINNED mesh: SKIP the Y-flip — the vertex stays in glTF-native
+        //     Y-up space, the same basis baseframe[]/vsBoneMatrix live in.
+        //     The editor render-walk compensates by applying a Y-flip to the
+        //     model's pivot (gated on MODEL_GLTF_SKINNED, set below).
+        //     This keeps skinning math algebraically consistent under any
+        //     animation delta, not just the small-delta common case.
+        if (!node->skin) {
+            world[1]  = -world[1];
+            world[5]  = -world[5];
+            world[9]  = -world[9];
+            world[13] = -world[13];
+        }
 
         // Winding-flip: the Y-flip above contributes a negative determinant,
         // so this flag toggles for normal-orientation nodes (and toggles back
@@ -978,6 +983,15 @@ int model_from_mem_gltf(model_t *m, iqm_t *q, const void *mem, int len, int flag
         // Both return true even when there is no skin / no animations (no-op).
         if (!model_load_skin_gltf(data, q)) error = 1;
         if (!error && !model_load_anims_gltf(data, q)) error = 1;
+    }
+
+    // Mark skinned-glTF so the editor render-walk applies a Y-flip on the
+    // pivot. The vertex-loop above intentionally leaves skinned vertices in
+    // glTF-native Y-up space (matching baseframe[]/vsBoneMatrix), so we owe
+    // the pipeline one Y-flip somewhere — the per-model pivot is the
+    // cleanest place that doesn't interfere with the IQM-mintán math.
+    if (!error && data->skins_count > 0) {
+        m->flags |= MODEL_GLTF_SKINNED;
     }
 
     cgltf_free(data);

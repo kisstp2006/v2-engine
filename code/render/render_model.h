@@ -17,6 +17,11 @@ enum MODEL_FLAGS {
 
     // internal
     MODEL_PROCEDURAL = 2048,
+    // Set by model_from_mem_gltf when the file contains a skin. The editor's
+    // render-walk uses this to apply a per-model Y-flip on the pivot, since
+    // the vertex-loop intentionally skips Y-flipping skinned-glTF meshes (to
+    // keep att_pos and vsBoneMatrix in the same glTF-native Y-up basis).
+    MODEL_GLTF_SKINNED = 4096,
 };
 
 enum FOG_MODE {
@@ -1280,7 +1285,8 @@ model_t model_from_mem(const void *mem, int len, int flags) {
         m.sky_env.id = 0;
         m.sky_refl.id = 0;
 
-        m.flags = flags;
+        // Merge — preserve loader-set bits (e.g. MODEL_GLTF_SKINNED).
+        m.flags |= flags;
 
         id44(m.pivot);
 

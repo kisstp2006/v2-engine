@@ -385,6 +385,12 @@ typedef struct iqm_t {
     uint32_t instancing_checksum;
     unsigned light_ubo;
     int texture_unit;
+    // GLTF-loader memory-ownership flag: when a loader CALLOC-s a field
+    // separately (instead of pointing into the q->buf arena), it must set
+    // the matching bit so model_destroy frees the pointer.
+    //   bit 0 = meshes, 1 = joints, 2 = anims, 3 = bounds, 4 = frames
+    // IQM-loader keeps it at 0 (everything lives in q->buf).
+    unsigned external_allocs;
 } iqm_t;
 
 //
@@ -2194,6 +2200,12 @@ void model_destroy(model_t m) {
         FREE(q->inversebaseframe);
         if(q->animdata != q->meshdata) FREE(q->animdata);
         FREE(q->frames);
+        // GLTF-loader CALLOC-ed these separately (they don't point into q->buf);
+        // IQM-loader leaves external_allocs == 0 so nothing happens here.
+        if (q->external_allocs & 1) FREE(q->meshes);
+        if (q->external_allocs & 2) FREE(q->joints);
+        if (q->external_allocs & 4) FREE(q->anims);
+        if (q->external_allocs & 8) FREE(q->bounds);
         FREE(q->buf);
         FREE(q);
     }

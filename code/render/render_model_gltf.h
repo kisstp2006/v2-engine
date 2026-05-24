@@ -239,6 +239,9 @@ bool model_load_meshes_gltf(cgltf_data *data, iqm_t *q, model_t *m, int flags) {
     // ---- 1) total-vertex / total-triangle / total-primitive count --------
     // Node-level iteration: every node that has a mesh (in instancing the same
     // mesh pointer can appear multiple times — each instance loaded separately).
+    // Non-indexed primitives (no `indices` accessor) are supported as implicit
+    // triangle-lists where vertex 3k/3k+1/3k+2 form triangle k. Fox.glb is a
+    // common example.
     int total_verts = 0, total_tris = 0, total_prims = 0;
     for (size_t ni = 0; ni < data->nodes_count; ni++) {
         cgltf_node *node = &data->nodes[ni];
@@ -246,7 +249,6 @@ bool model_load_meshes_gltf(cgltf_data *data, iqm_t *q, model_t *m, int flags) {
         for (size_t pi = 0; pi < node->mesh->primitives_count; pi++) {
             cgltf_primitive *p = &node->mesh->primitives[pi];
             if (p->type != cgltf_primitive_type_triangles) continue;
-            if (!p->indices) continue;
             cgltf_accessor *pos = NULL;
             for (size_t ai = 0; ai < p->attributes_count; ai++) {
                 if (p->attributes[ai].type == cgltf_attribute_type_position) {
@@ -255,8 +257,10 @@ bool model_load_meshes_gltf(cgltf_data *data, iqm_t *q, model_t *m, int flags) {
                 }
             }
             if (!pos) continue;
+            int idx_count = p->indices ? (int)p->indices->count : (int)pos->count;
+            if (idx_count < 3 || (idx_count % 3) != 0) continue;
             total_verts += (int)pos->count;
-            total_tris  += (int)(p->indices->count / 3);
+            total_tris  += idx_count / 3;
             total_prims++;
         }
     }
@@ -271,11 +275,15 @@ bool model_load_meshes_gltf(cgltf_data *data, iqm_t *q, model_t *m, int flags) {
     q->nummeshes = total_prims;
     q->numverts  = total_verts;
     q->numtris   = total_tris;
-    q->numjoints = 0;        // Step 4: skinning
-    q->numframes = 0;        // Step 5: animations
+    q->numjoints = 0;        // Step 4: model_load_skin_gltf fills this
+    q->numframes = 0;        // Step 5: real anims (Step 4 dummy frame too)
     q->meshes          = CALLOC(total_prims, sizeof(struct iqmmesh));
     q->mesh_materials  = CALLOC(total_prims, sizeof(unsigned));
     q->bounds          = CALLOC(1, sizeof(struct iqmbounds));
+    // Mark ownership so model_destroy frees them (IQM-loader points these into
+    // the q->buf arena instead; see render_model.h iqm_t.external_allocs).
+    // mesh_materials is unconditionally FREEd by model_destroy → no flag needed.
+    q->external_allocs |= 1 /*meshes*/ | 8 /*bounds*/;
 
     // ---- 3) CPU-side vertex + index buffer ------------------------------
     iqm_vertex          *verts = CALLOC(total_verts, sizeof(iqm_vertex));
@@ -308,10 +316,10 @@ bool model_load_meshes_gltf(cgltf_data *data, iqm_t *q, model_t *m, int flags) {
         for (size_t pi = 0; pi < node->mesh->primitives_count; pi++) {
             cgltf_primitive *p = &node->mesh->primitives[pi];
             if (p->type != cgltf_primitive_type_triangles) continue;
-            if (!p->indices) continue;
 
             cgltf_accessor *acc_pos = NULL, *acc_nrm = NULL, *acc_uv = NULL;
             cgltf_accessor *acc_col = NULL, *acc_tan = NULL;
+            cgltf_accessor *acc_joints = NULL, *acc_weights = NULL;  // Step 4
             for (size_t ai = 0; ai < p->attributes_count; ai++) {
                 cgltf_attribute *attr = &p->attributes[ai];
                 switch (attr->type) {
@@ -320,13 +328,17 @@ bool model_load_meshes_gltf(cgltf_data *data, iqm_t *q, model_t *m, int flags) {
                     case cgltf_attribute_type_texcoord: if (!acc_uv)  acc_uv  = attr->data; break;
                     case cgltf_attribute_type_color:    if (!acc_col) acc_col = attr->data; break;
                     case cgltf_attribute_type_tangent:  acc_tan = attr->data; break;
+                    case cgltf_attribute_type_joints:   if (!acc_joints)  acc_joints  = attr->data; break;
+                    case cgltf_attribute_type_weights:  if (!acc_weights) acc_weights = attr->data; break;
                     default: break;
                 }
             }
             if (!acc_pos) continue;
 
             int nv = (int)acc_pos->count;
-            int nt = (int)(p->indices->count / 3);
+            int idx_count = p->indices ? (int)p->indices->count : nv;
+            if (idx_count < 3 || (idx_count % 3) != 0) continue;
+            int nt = idx_count / 3;
 
             // ---- Vertex-loop (vertex attributes with world-transform) ----
             for (int v = 0; v < nv; v++) {
@@ -399,13 +411,72 @@ bool model_load_meshes_gltf(cgltf_data *data, iqm_t *q, model_t *m, int flags) {
                     iv->color[0] = 1; iv->color[1] = 1;
                     iv->color[2] = 1; iv->color[3] = 1;
                 }
+
+                // Step 4: skinning indexes/weights (NO world-transform — they
+                // are joint-space indices). cgltf_accessor_read_float
+                // auto-normalizes u8/u16/f32, so we just clamp + scale to
+                // the iqm_vertex uint8 fields. The shader (model_vs.glsl:78-82)
+                // reads att_indexes as floats; values must be plain joint
+                // indices in [0, numjoints-1].
+                if (acc_joints) {
+                    float j[4] = {0, 0, 0, 0};
+                    cgltf_accessor_read_float(acc_joints, v, j, 4);
+                    for (int k = 0; k < 4; k++) {
+                        float jc = j[k] < 0.f ? 0.f : (j[k] > 255.f ? 255.f : j[k]);
+                        iv->blendindexes[k] = (uint8_t)jc;
+                    }
+                } else {
+                    // Non-skin primitive in an otherwise-skinned model: bind
+                    // every vertex to joint 0 with full weight. With the
+                    // dummy 1-frame identity anim from model_load_skin_gltf,
+                    // joint 0's transform is identity * inversebaseframe[0]
+                    // — so the mesh renders untransformed in bind-space.
+                    iv->blendindexes[0] = 0; iv->blendindexes[1] = 0;
+                    iv->blendindexes[2] = 0; iv->blendindexes[3] = 0;
+                }
+                if (acc_weights) {
+                    float w[4] = {1, 0, 0, 0};
+                    cgltf_accessor_read_float(acc_weights, v, w, 4);
+                    // Sum-normalize defensively (glTF spec says =1, but some
+                    // exporters drift; the shader sums weighted bones).
+                    float sum = w[0] + w[1] + w[2] + w[3];
+                    if (sum > 1e-6f) {
+                        w[0] /= sum; w[1] /= sum; w[2] /= sum; w[3] /= sum;
+                    }
+                    for (int k = 0; k < 4; k++) {
+                        int wi = (int)(w[k] * 255.f + 0.5f);
+                        if (wi < 0) wi = 0; if (wi > 255) wi = 255;
+                        iv->blendweights[k] = (uint8_t)wi;
+                    }
+                } else {
+                    iv->blendweights[0] = 255;
+                    iv->blendweights[1] = 0;
+                    iv->blendweights[2] = 0;
+                    iv->blendweights[3] = 0;
+                }
+                // IQM-loader writes this with the global vertex index
+                // (render_model.h:792-794); a few shaders use it for
+                // per-vertex picking / debug. Keep parity.
+                {
+                    float vi = (float)(vert_base + v);
+                    memcpy(&iv->blendvertexindex, &vi, sizeof(float));
+                }
             }
 
             // ---- Index-loop (winding-flip if det < 0 on the node-transform) ----
+            // Indexed vs. non-indexed primitive: when there are no indices,
+            // the triangle list is implicit — vertex 3k/3k+1/3k+2 = triangle k.
             for (int t = 0; t < nt; t++) {
-                unsigned i0 = (unsigned)cgltf_accessor_read_index(p->indices, t*3 + 0) + vert_base;
-                unsigned i1 = (unsigned)cgltf_accessor_read_index(p->indices, t*3 + 1) + vert_base;
-                unsigned i2 = (unsigned)cgltf_accessor_read_index(p->indices, t*3 + 2) + vert_base;
+                unsigned i0, i1, i2;
+                if (p->indices) {
+                    i0 = (unsigned)cgltf_accessor_read_index(p->indices, t*3 + 0) + vert_base;
+                    i1 = (unsigned)cgltf_accessor_read_index(p->indices, t*3 + 1) + vert_base;
+                    i2 = (unsigned)cgltf_accessor_read_index(p->indices, t*3 + 2) + vert_base;
+                } else {
+                    i0 = (unsigned)(vert_base + t*3 + 0);
+                    i1 = (unsigned)(vert_base + t*3 + 1);
+                    i2 = (unsigned)(vert_base + t*3 + 2);
+                }
                 if (flip_winding) {
                     // negative scale on the node → CCW ↔ CW inversion
                     unsigned tmp = i1; i1 = i2; i2 = tmp;
@@ -469,6 +540,163 @@ bool model_load_meshes_gltf(cgltf_data *data, iqm_t *q, model_t *m, int flags) {
     return true;
 }
 
+// Step 4 — Skinning loader. Builds q->joints/baseframe/inversebaseframe/outframe
+// and installs a dummy 1-frame anim that flips the SKINNED vertex-shader
+// uniform on. Bit-pointed at the IQM-loader math:
+//   - bind-pose parent-chain: render_model.h:748-757
+//   - frames[] layout:        render_model.h:875,904
+//   - SKINNED uniform gate:   render_model.h:487  (bool skinned = !!numanims)
+//
+// Coordinate-system note (RISK #13 in the plan):
+// model_load_meshes_gltf above applies a Y-flip to every vertex world-matrix
+// (render_model_gltf.h:301-304) — glTF is Y-up but the engine renders Y-down.
+// To keep att_pos and vsBoneMatrix in the SAME space we apply the matching
+// Y-mirror to the joint TRS here BEFORE compose34. Without this the skinning
+// math lands in a different basis than the vertex and the mesh inverts.
+//
+// Returns true even when the file has no skin (no-op, model stays static).
+static
+bool model_load_skin_gltf(cgltf_data *data, iqm_t *q) {
+    if (data->skins_count == 0) return true;
+    if (data->skins_count > 1) {
+        PRINTF("GLTF: %d skins found, only skins[0] is used\n",
+               (int)data->skins_count);
+    }
+    cgltf_skin *skin = &data->skins[0];
+
+    int nj = (int)skin->joints_count;
+    if (nj <= 0) return true;
+    if (nj > 64) {
+        PRINTF("GLTF skin WARN: %d joints (>64) — may underperform on mobile\n", nj);
+    }
+    if (nj > 110) {
+        // model_vs.glsl:7 defines MAX_BONES=110 — uniform-array overrun is hard fail.
+        PRINTF("GLTF skin ERROR: %d joints exceeds shader MAX_BONES=110\n", nj);
+        return false;
+    }
+
+    q->numjoints        = nj;
+    q->joints           = CALLOC(nj, sizeof(struct iqmjoint));
+    q->baseframe        = CALLOC(nj, sizeof(mat34));
+    q->inversebaseframe = CALLOC(nj, sizeof(mat34));
+    q->outframe         = CALLOC(nj, sizeof(mat34));
+    q->external_allocs |= 2;   // joints owned by us (others are unconditionally FREEd)
+
+    // 1) Parse joints — store raw glTF TRS into q->joints[] (Step 5 anim-loop
+    // reads these as the fallback for missing T/R/S channels). Build the
+    // Y-mirrored bind-pose into baseframe[].
+    for (int i = 0; i < nj; i++) {
+        cgltf_node *jn = skin->joints[i];
+
+        float Tx = jn->has_translation ? jn->translation[0] : 0.f;
+        float Ty = jn->has_translation ? jn->translation[1] : 0.f;
+        float Tz = jn->has_translation ? jn->translation[2] : 0.f;
+        float Rx = jn->has_rotation    ? jn->rotation[0]    : 0.f;
+        float Ry = jn->has_rotation    ? jn->rotation[1]    : 0.f;
+        float Rz = jn->has_rotation    ? jn->rotation[2]    : 0.f;
+        float Rw = jn->has_rotation    ? jn->rotation[3]    : 1.f;
+        float Sx = jn->has_scale       ? jn->scale[0]       : 1.f;
+        float Sy = jn->has_scale       ? jn->scale[1]       : 1.f;
+        float Sz = jn->has_scale       ? jn->scale[2]       : 1.f;
+
+        if (jn->has_matrix) {
+            // TODO: decompose jn->matrix[16] into T/R/S — uncommon in practice;
+            // most exporters emit TRS-form joints.
+            PRINTF("GLTF skin: joint %d has matrix-form transform, "
+                   "TRS-decompose not yet supported — using identity\n", i);
+            Tx = Ty = Tz = 0.f;
+            Rx = Ry = Rz = 0.f; Rw = 1.f;
+            Sx = Sy = Sz = 1.f;
+        }
+
+        q->joints[i].name = 0;
+        q->joints[i].translate[0] = Tx; q->joints[i].translate[1] = Ty; q->joints[i].translate[2] = Tz;
+        q->joints[i].rotate[0]    = Rx; q->joints[i].rotate[1]    = Ry; q->joints[i].rotate[2]    = Rz; q->joints[i].rotate[3] = Rw;
+        q->joints[i].scale[0]     = Sx; q->joints[i].scale[1]     = Sy; q->joints[i].scale[2]     = Sz;
+
+        // Parent-index lookup inside the skin->joints[] array (O(N^2), N<=110 OK).
+        q->joints[i].parent = -1;
+        if (jn->parent) {
+            for (int p = 0; p < nj; p++) {
+                if (skin->joints[p] == jn->parent) {
+                    q->joints[i].parent = p;
+                    break;
+                }
+            }
+        }
+
+        // Y-mirror the TRS for the bind-pose. Quaternion Y-mirror:
+        //   (qx, qy, qz, qw) → (-qx, qy, -qz, qw)
+        // (rotations about X and Z reverse direction under a Y-axis mirror).
+        vec3 T = vec3(Tx, -Ty, Tz);
+        quat R = quat(-Rx, Ry, -Rz, Rw);
+        vec3 S = vec3(Sx, Sy, Sz);
+
+        compose34(q->baseframe[i], T, normq(R), S);
+    }
+
+    // 2) Parent-chain pass (IQM-mintára render_model.h:754).
+    // Done in a second pass so a child can rely on parents being already built
+    // — glTF doesn't guarantee parent-before-child order in skin->joints[].
+    for (int i = 0; i < nj; i++) {
+        int p = q->joints[i].parent;
+        if (p >= 0 && p < nj) {
+            mat34 tmp; copy34(tmp, q->baseframe[i]);
+            multiply34x2(q->baseframe[i], q->baseframe[p], tmp);
+        }
+    }
+
+    // 3) Inverse bind-matrices. We deliberately ignore cgltf_skin.inverse_bind_matrices
+    // (even when present) because the cgltf IBM is in glTF-native space and
+    // would need Y-mirror conjugation. Inverting our already-Y-mirrored
+    // baseframe is bit-exact and avoids a class of conjugation bugs.
+    for (int i = 0; i < nj; i++) {
+        invert34(q->inversebaseframe[i], q->baseframe[i]);
+    }
+
+    // 4) Dummy 2-frame identity anim — Step 5 FREE's this and replaces it with
+    // the real animations. Two design points:
+    //
+    //   a) We need numanims > 0 NOW so the vertex-shader SKINNED uniform flips
+    //      on (render_model.h:487: `bool skinned = !!q->numanims`).
+    //
+    //   b) We need numframes >= 2 (NOT 1) because pose() in render_anim.h:75
+    //      computes `distance = maxframe - minframe` and does `fmod(x, distance)`.
+    //      With a single-frame clip distance == 0 → fmod is NaN → (int)NaN is
+    //      undefined behavior on MSVC and crashes lerp34 inside model_animate_clip.
+    //      model_from_mem calls model_animate(m, 0) on every load, so this would
+    //      SIGSEGV at load time. Two frames give distance = 1 → fmod is safe.
+    //
+    //   c) Each frame is plain identity (NOT baseframe[parent] * id * inversebase[j]).
+    //      The IQM math is `outframe[i] = outframe[parent] * frames[i]`, so if
+    //      frames[*] = identity then outframe[*] = identity recursively, and the
+    //      vertex shader's vsBoneMatrix[bone] * att_pos leaves att_pos in its
+    //      bind-pose model-space — which is exactly the correct static render.
+    //      (Using the IQM-style `baseframe[parent]*id*inversebase[j]` pattern
+    //      would project every vertex into joint-local space and produce a
+    //      collapsed mess.)
+    q->numanims  = 1;
+    q->numframes = 2;
+    q->anims  = CALLOC(1, sizeof(struct iqmanim));
+    q->anims[0].name        = 0;
+    q->anims[0].first_frame = 0;
+    q->anims[0].num_frames  = 2;
+    q->anims[0].framerate   = 30.f;
+    q->anims[0].flags       = IQM_LOOP;
+    q->external_allocs |= 4;   // anims owned by us
+
+    q->frames = CALLOC(q->numframes * nj, sizeof(mat34));
+    for (int f = 0; f < q->numframes; f++) {
+        for (int j = 0; j < nj; j++) {
+            id34(q->frames[f * nj + j]);
+        }
+    }
+    // q->frames is always FREE'd by model_destroy unconditionally (IQM-loader
+    // also CALLOCs it at render_model.h:875), so no external_allocs bit.
+
+    return true;
+}
+
 // Main entry-point, called from `model_from_mem`. mem/len = the loaded
 // GLTF/GLB blob. In GLB every buffer is contained (cgltf_parse unpacks them);
 // for JSON-only .gltf the external `.bin` file is NOT loaded yet (later step).
@@ -497,6 +725,12 @@ int model_from_mem_gltf(model_t *m, iqm_t *q, const void *mem, int len, int flag
     if (!error && !(flags & MODEL_NO_TEXTURES)) {
         // Step 3: structured PBR mapping (instead of the stub).
         model_load_materials_gltf(data, m);
+    }
+    if (!error && !(flags & MODEL_NO_ANIMATIONS)) {
+        // Step 4: skinning (joints + bind-pose + dummy 1-frame anim).
+        // Step 5 will replace the dummy anim with the real cgltf_animations.
+        // Returns true even when there is no skin (no-op).
+        if (!model_load_skin_gltf(data, q)) error = 1;
     }
 
     cgltf_free(data);

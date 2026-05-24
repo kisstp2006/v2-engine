@@ -297,20 +297,53 @@ bool model_load_meshes_gltf(cgltf_data *data, iqm_t *q, model_t *m, int flags) {
         cgltf_node *node = &data->nodes[ni];
         if (!node->mesh) continue;
 
-        // World-transform (node TRS × parent chain).
+        // World-transform (node TRS × parent chain). glTF and the v2 engine
+        // both render Y-up: IQM-loader memcpy's positions verbatim
+        // (render_model.h:781) and demos/13-model.c uses a near-identity
+        // pivot — no Y-flip anywhere in the IQM path. We mirror that here:
+        // glTF vertices go into the VBO in their native Y-up space.
         float world[16];
         cgltf_node_transform_world(node, world);
 
-        // Y-flip: the engine's IQM convention is Y-down in vertex-coordinate
-        // space (the render pipeline inverts the Y-axis somewhere). glTF's
-        // Y-up vertices must be mirrored to that. We achieve this with a
-        // pre-multiplied Y-mirror matrix on the world. The resulting negative
-        // determinant automatically triggers the winding flip.
-        world[1]  = -world[1];   // row 1 (Y row)
+        // glTF 2.0 spec: when a node has a skin, its TRS properties have NO
+        // EFFECT — the joints fully determine the vertex positions. We use a
+        // different world here for skinned nodes: the world transform of the
+        // skin's above-skin root (= skin.joints[0]->parent). This brings the
+        // mesh-local vertices into the same "skin coordinate system" that the
+        // skin-internal baseframe[]/frames[] live in, so vsBoneMatrix * att_pos
+        // comes out in a coherent space (which the render pipeline then takes
+        // as world-space).
+        //
+        // Without this, Fox + RiggedSimple bake Z-up→Y-up rotations into their
+        // skeleton root (`_rootJoint`/`b_Root_00`/`Armature`) but those rotations
+        // are missed by our skin-internal Pass-2 parent-chain (the parent isn't
+        // in skin.joints[]), so the mesh ends up upside-down or 90°-leaned.
+        if (node->skin) {
+            cgltf_node *above_skin = (node->skin->joints_count > 0)
+                                   ? node->skin->joints[0]->parent
+                                   : NULL;
+            if (above_skin) {
+                cgltf_node_transform_world(above_skin, world);
+            } else {
+                for (int k = 0; k < 16; k++) world[k] = 0.0f;
+                world[0] = world[5] = world[10] = world[15] = 1.0f;  // identity
+            }
+        }
+
+        // Empirical Y-flip: every glTF model renders upside-down in the v2
+        // pipeline without this. IQM models compensate via their per-model
+        // pivot (e.g. demos/13-model.c uses eulerq(0,-90,0) on .pivot); for
+        // glTF we bake it into the vertex bind here so MeshRenderer pivots
+        // stay identity by default. The negated Y row applies to both
+        // static and skinned meshes (above_skin world is already in `world`).
+        world[1]  = -world[1];
         world[5]  = -world[5];
         world[9]  = -world[9];
         world[13] = -world[13];
 
+        // Winding-flip: the Y-flip above contributes a negative determinant,
+        // so this flag toggles for normal-orientation nodes (and toggles back
+        // off for nodes with an additional mirror in their TRS).
         bool flip_winding = (gltf_mat3_det(world) < 0.0f);
 
         for (size_t pi = 0; pi < node->mesh->primitives_count; pi++) {
@@ -625,11 +658,10 @@ bool model_load_skin_gltf(cgltf_data *data, iqm_t *q) {
             }
         }
 
-        // Y-mirror the TRS for the bind-pose. Quaternion Y-mirror:
-        //   (qx, qy, qz, qw) → (-qx, qy, -qz, qw)
-        // (rotations about X and Z reverse direction under a Y-axis mirror).
-        vec3 T = vec3(Tx, -Ty, Tz);
-        quat R = quat(-Rx, Ry, -Rz, Rw);
+        // IQM-mintára (render_model.h:752): compose local TRS into baseframe[i],
+        // parent-chain in Pass 2.
+        vec3 T = vec3(Tx, Ty, Tz);
+        quat R = quat(Rx, Ry, Rz, Rw);
         vec3 S = vec3(Sx, Sy, Sz);
 
         compose34(q->baseframe[i], T, normq(R), S);
@@ -646,10 +678,7 @@ bool model_load_skin_gltf(cgltf_data *data, iqm_t *q) {
         }
     }
 
-    // 3) Inverse bind-matrices. We deliberately ignore cgltf_skin.inverse_bind_matrices
-    // (even when present) because the cgltf IBM is in glTF-native space and
-    // would need Y-mirror conjugation. Inverting our already-Y-mirrored
-    // baseframe is bit-exact and avoids a class of conjugation bugs.
+    // 3) Inverse bind-matrices = invert(baseframe). IQM-mintára (render_model.h:753).
     for (int i = 0; i < nj; i++) {
         invert34(q->inversebaseframe[i], q->baseframe[i]);
     }
@@ -697,6 +726,223 @@ bool model_load_skin_gltf(cgltf_data *data, iqm_t *q) {
     return true;
 }
 
+// ---- Step 5 — Animation loader (LINEAR, fixed 30 Hz resampling) -----------
+
+// Returns the latest keyframe-time across all samplers of an animation.
+// glTF doesn't store a duration field; we derive it from sampler->input[].
+static
+float gltf_anim_max_time(const cgltf_animation *a) {
+    float max_t = 0.f;
+    for (size_t s = 0; s < a->samplers_count; s++) {
+        cgltf_accessor *t_acc = a->samplers[s].input;
+        if (!t_acc || t_acc->count == 0) continue;
+        float t_last = 0.f;
+        cgltf_accessor_read_float(t_acc, t_acc->count - 1, &t_last, 1);
+        if (t_last > max_t) max_t = t_last;
+    }
+    return max_t;
+}
+
+// Binary-search the keyframe-pair bracketing t_query. O(log N) per query.
+// alpha = (t_query - t[k0]) / (t[k1] - t[k0]), clamped to keyframe boundaries.
+// For single-keyframe samplers returns (0, 0, 0). For t outside the range
+// snaps to the boundary keyframe with alpha=0 (no extrapolation).
+static
+void gltf_find_keyframe_pair(cgltf_accessor *t_acc, float t_query,
+                             int *k0, int *k1, float *alpha) {
+    int n = (int)t_acc->count;
+    if (n <= 1) { *k0 = 0; *k1 = 0; *alpha = 0.f; return; }
+
+    float t_first, t_last;
+    cgltf_accessor_read_float(t_acc, 0,     &t_first, 1);
+    cgltf_accessor_read_float(t_acc, n - 1, &t_last,  1);
+    if (t_query <= t_first) { *k0 = 0;     *k1 = 0;     *alpha = 0.f; return; }
+    if (t_query >= t_last)  { *k0 = n - 1; *k1 = n - 1; *alpha = 0.f; return; }
+
+    // Bisect: find lo such that t_acc[lo] <= t_query < t_acc[lo+1].
+    int lo = 0, hi = n - 1;
+    while (lo + 1 < hi) {
+        int mid = (lo + hi) >> 1;
+        float t_mid;
+        cgltf_accessor_read_float(t_acc, mid, &t_mid, 1);
+        if (t_mid <= t_query) lo = mid;
+        else                  hi = mid;
+    }
+    *k0 = lo; *k1 = lo + 1;
+    float t0, t1;
+    cgltf_accessor_read_float(t_acc, *k0, &t0, 1);
+    cgltf_accessor_read_float(t_acc, *k1, &t1, 1);
+    *alpha = (t1 > t0) ? (t_query - t0) / (t1 - t0) : 0.f;
+}
+
+// Step 5 — Replaces the dummy 1-anim from model_load_skin_gltf with all
+// cgltf_animations sampled at a fixed 30 Hz. Layout is bit-identical to the
+// IQM-loader's frames[] (render_model.h:875,904), so model_animate_clip works
+// unchanged. Anim-names are NOT stored (the API is frame-index-based; Lua
+// users address clips via q->anims[i].first_frame/num_frames).
+//
+// Per-anim memory: num_frames * num_joints * sizeof(mat34). 30 Hz fits typical
+// glTF cycles (Fox: 87 frames, CesiumMan: 61 frames, BrainStem: ~256 frames).
+//
+// Coordinate-system note: same Y-mirror conjugation as the bind-pose pass in
+// model_load_skin_gltf — TRS Y-mirror BEFORE compose34, so the sampled
+// per-frame pose lives in the same Y-flipped space as att_pos.
+//
+// Interpolation policy: LINEAR only. STEP samplers treat as LINEAR
+// (negligible visual diff at 30 Hz). CUBICSPLINE is skipped channel-wise
+// (incompatible accessor layout — outputs are 3× the keyframe count).
+//
+// Returns true if there are no animations (no-op) or all animations loaded OK.
+static
+bool model_load_anims_gltf(cgltf_data *data, iqm_t *q) {
+    if (data->animations_count == 0) return true;
+    if (q->numjoints == 0)            return true;
+    if (data->skins_count == 0)       return true;
+    cgltf_skin *skin = &data->skins[0];
+
+    // Tear down the dummy 1-anim from Step 4 (model_load_skin_gltf).
+    // anims was CALLOC'd with external_allocs bit 4; frames is unconditional FREE.
+    FREE(q->anims);  q->anims  = NULL;
+    FREE(q->frames); q->frames = NULL;
+
+    int na = (int)data->animations_count;
+    q->anims = CALLOC(na, sizeof(struct iqmanim));   // bit 4 already set
+    q->numanims = na;
+
+    // Pass 1 — fill iqmanim headers, sum total_frames.
+    int total_frames = 0;
+    for (int a = 0; a < na; a++) {
+        float max_t = gltf_anim_max_time(&data->animations[a]);
+        int nf = (int)ceilf(max_t * 30.f) + 1;
+        if (nf < 2) nf = 2;   // pose() safety: distance >= 1
+        q->anims[a].name        = 0;    // no string table for GLTF
+        q->anims[a].first_frame = (unsigned)total_frames;
+        q->anims[a].num_frames  = (unsigned)nf;
+        q->anims[a].framerate   = 30.f;
+        q->anims[a].flags       = IQM_LOOP;
+        total_frames += nf;
+    }
+    q->numframes = total_frames;
+    q->frames    = CALLOC((size_t)total_frames * (size_t)q->numjoints, sizeof(mat34));
+
+    int step_warned = 0, cubic_warned = 0;
+
+    // Pass 2 — sample per-frame per-joint TRS, compose into frames[].
+    for (int a = 0; a < na; a++) {
+        cgltf_animation *anim = &data->animations[a];
+        int first = (int)q->anims[a].first_frame;
+        int nf    = (int)q->anims[a].num_frames;
+        float max_t = gltf_anim_max_time(anim);
+
+        for (int f = 0; f < nf; f++) {
+            float t_query = (float)f / 30.f;
+            if (t_query > max_t) t_query = max_t;
+
+            for (int j = 0; j < q->numjoints; j++) {
+                cgltf_node *jn = skin->joints[j];
+
+                // Start from this joint's bind-pose TRS (Step 4 stored these
+                // in q->joints[j] as raw glTF-native values, not Y-mirrored).
+                float Tx = q->joints[j].translate[0];
+                float Ty = q->joints[j].translate[1];
+                float Tz = q->joints[j].translate[2];
+                float Rx = q->joints[j].rotate[0];
+                float Ry = q->joints[j].rotate[1];
+                float Rz = q->joints[j].rotate[2];
+                float Rw = q->joints[j].rotate[3];
+                float Sx = q->joints[j].scale[0];
+                float Sy = q->joints[j].scale[1];
+                float Sz = q->joints[j].scale[2];
+
+                // Scan all channels that target this joint, apply T/R/S overrides.
+                for (int c = 0; c < (int)anim->channels_count; c++) {
+                    cgltf_animation_channel *ch = &anim->channels[c];
+                    if (ch->target_node != jn) continue;
+                    cgltf_animation_sampler *sam = ch->sampler;
+                    if (!sam || !sam->input || !sam->output) continue;
+
+                    if (sam->interpolation == cgltf_interpolation_type_cubic_spline) {
+                        // CUBICSPLINE output has 3× the keyframe count (in, value, out
+                        // tangents). Reading naively would mis-align — skip channel.
+                        if (!cubic_warned) {
+                            PRINTF("GLTF anim WARN: CUBICSPLINE interpolation not "
+                                   "supported, channel skipped\n");
+                            cubic_warned = 1;
+                        }
+                        continue;
+                    }
+                    if (sam->interpolation == cgltf_interpolation_type_step) {
+                        if (!step_warned) {
+                            PRINTF("GLTF anim WARN: STEP interpolation treated as LINEAR\n");
+                            step_warned = 1;
+                        }
+                    }
+
+                    int k0, k1; float alpha;
+                    gltf_find_keyframe_pair(sam->input, t_query, &k0, &k1, &alpha);
+
+                    switch (ch->target_path) {
+                        case cgltf_animation_path_type_translation: {
+                            float v0[3] = {Tx, Ty, Tz};
+                            float v1[3] = {Tx, Ty, Tz};
+                            cgltf_accessor_read_float(sam->output, k0, v0, 3);
+                            cgltf_accessor_read_float(sam->output, k1, v1, 3);
+                            Tx = v0[0] + (v1[0] - v0[0]) * alpha;
+                            Ty = v0[1] + (v1[1] - v0[1]) * alpha;
+                            Tz = v0[2] + (v1[2] - v0[2]) * alpha;
+                        } break;
+                        case cgltf_animation_path_type_rotation: {
+                            float v0[4] = {Rx, Ry, Rz, Rw};
+                            float v1[4] = {Rx, Ry, Rz, Rw};
+                            cgltf_accessor_read_float(sam->output, k0, v0, 4);
+                            cgltf_accessor_read_float(sam->output, k1, v1, 4);
+                            // mixq is sign-flip-safe NLERP (game_math.h:502 negates
+                            // 'a' when dotq(a,b) < 0). Output is already normalized.
+                            quat r = mixq(quat(v0[0], v0[1], v0[2], v0[3]),
+                                          quat(v1[0], v1[1], v1[2], v1[3]),
+                                          alpha);
+                            Rx = r.x; Ry = r.y; Rz = r.z; Rw = r.w;
+                        } break;
+                        case cgltf_animation_path_type_scale: {
+                            float v0[3] = {Sx, Sy, Sz};
+                            float v1[3] = {Sx, Sy, Sz};
+                            cgltf_accessor_read_float(sam->output, k0, v0, 3);
+                            cgltf_accessor_read_float(sam->output, k1, v1, 3);
+                            Sx = v0[0] + (v1[0] - v0[0]) * alpha;
+                            Sy = v0[1] + (v1[1] - v0[1]) * alpha;
+                            Sz = v0[2] + (v1[2] - v0[2]) * alpha;
+                        } break;
+                        default: break;  // weights / morph: out-of-scope
+                    }
+                }
+
+                // No Y-mirror — bind-pose and anim TRS both live in the
+                // glTF-native Y-up space, exactly like the IQM-loader uses
+                // the raw fileformat TRS values (render_model.h:903).
+                vec3 T = vec3(Tx, Ty, Tz);
+                quat R = quat(Rx, Ry, Rz, Rw);
+                vec3 S = vec3(Sx, Sy, Sz);
+
+                mat34 m_local; compose34(m_local, T, normq(R), S);
+
+                // IQM-mintára (render_model.h:903-905):
+                //   frames[idx] = baseframe[parent] * compose(T,R,S) * inversebaseframe[j]
+                //          OR    compose(T,R,S) * inversebaseframe[j]   (root)
+                int idx = (first + f) * q->numjoints + j;
+                int p   = q->joints[j].parent;
+                if (p >= 0) {
+                    multiply34x3(q->frames[idx],
+                                 q->baseframe[p], m_local, q->inversebaseframe[j]);
+                } else {
+                    multiply34x2(q->frames[idx], m_local, q->inversebaseframe[j]);
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
 // Main entry-point, called from `model_from_mem`. mem/len = the loaded
 // GLTF/GLB blob. In GLB every buffer is contained (cgltf_parse unpacks them);
 // for JSON-only .gltf the external `.bin` file is NOT loaded yet (later step).
@@ -727,10 +973,11 @@ int model_from_mem_gltf(model_t *m, iqm_t *q, const void *mem, int len, int flag
         model_load_materials_gltf(data, m);
     }
     if (!error && !(flags & MODEL_NO_ANIMATIONS)) {
-        // Step 4: skinning (joints + bind-pose + dummy 1-frame anim).
-        // Step 5 will replace the dummy anim with the real cgltf_animations.
-        // Returns true even when there is no skin (no-op).
+        // Step 4: skinning (joints + bind-pose + dummy 2-frame identity anim).
+        // Step 5: replaces the dummy anim with the real cgltf_animations.
+        // Both return true even when there is no skin / no animations (no-op).
         if (!model_load_skin_gltf(data, q)) error = 1;
+        if (!error && !model_load_anims_gltf(data, q)) error = 1;
     }
 
     cgltf_free(data);

@@ -100,6 +100,11 @@ void GamePanel::walkAndRenderMeshes(obj* node, EditorApp& app, camera_t& cam,
                 model_shadow(&it->second, nullptr);
                 mat44 pivot;
                 editor_mesh_renderer_compose_pivot(node, pivot);
+                // Auto-tick the animation at 30 Hz so skinned glTF models
+                // preview motion without scripting. No-op for static models
+                // (numframes=0 → model_animate_clip returns -1 early) and for
+                // the Step 4 dummy anim (numframes=2, both frames identity).
+                model_animate(it->second, (float)(time_ss() * 30.0));
                 model_render(&it->second, cam.proj, cam.view, &pivot, 1, -1);
             }
         }

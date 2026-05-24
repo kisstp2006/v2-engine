@@ -152,6 +152,11 @@ void ScenePanel::renderMeshNode(obj* node, EditorApp& app,
 
     mat44 pivot;
     editor_mesh_renderer_compose_pivot(node, pivot);
+    // Auto-tick the animation at 30 Hz so skinned glTF models preview motion
+    // in the Scene viewport without scripting. No-op for static models
+    // (numframes=0 → model_animate_clip returns -1 early) and for the Step 4
+    // dummy anim (numframes=2, both frames identity).
+    model_animate(it->second, (float)(time_ss() * 30.0));
     // pass = -1 → every default pass (lighting, shading, shadow-sampling).
     model_render(&it->second, cam_.proj, cam_.view, &pivot, 1, -1);
 }

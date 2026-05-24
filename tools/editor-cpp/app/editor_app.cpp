@@ -268,6 +268,26 @@ obj* EditorApp::createSkybox(const char* sky_path, obj* parent) {
     return n;
 }
 
+obj* EditorApp::createTextRenderer(const char* text, obj* parent) {
+    obj* p = parent ? parent : ensureRoot();
+    if (!p) return nullptr;
+    obj* n = editor_obj_new_text_renderer(p, "Text", text);
+    selection_.setPrimary(n);
+    commands_.execute(std::make_unique<AddNodeCommand>(p, n, "Add Text"));
+    if (console_) console_->log("Created: Text");
+    return n;
+}
+
+obj* EditorApp::createText3DRenderer(const char* text, obj* parent) {
+    obj* p = parent ? parent : ensureRoot();
+    if (!p) return nullptr;
+    obj* n = editor_obj_new_text_renderer_3d(p, "Text3D", text);
+    selection_.setPrimary(n);
+    commands_.execute(std::make_unique<AddNodeCommand>(p, n, "Add Text3D"));
+    if (console_) console_->log("Created: Text3D");
+    return n;
+}
+
 obj* EditorApp::createAudioSource(const char* clip_path, obj* parent) {
     obj* p = parent ? parent : ensureRoot();
     if (!p) return nullptr;
@@ -763,6 +783,11 @@ void EditorApp::drawMenubar() {
         if (ImGui::BeginMenu("Environment")) {
             if (ImGui::MenuItem("Fog")) createFogSettings();
             if (ImGui::MenuItem("Skybox (empty path)")) createSkybox("");
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("UI")) {
+            if (ImGui::MenuItem("Text (HUD)")) createTextRenderer("");
+            if (ImGui::MenuItem("Text 3D (world-space)")) createText3DRenderer("");
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Audio")) {

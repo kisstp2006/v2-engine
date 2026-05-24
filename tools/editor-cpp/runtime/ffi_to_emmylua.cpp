@@ -443,6 +443,8 @@ GenResult generate(const std::string& projectPath,
           << "---@field is_script        fun(o: obj|nil): boolean\n"
           << "---@field is_fog           fun(o: obj|nil): boolean\n"
           << "---@field is_skybox        fun(o: obj|nil): boolean\n"
+          << "---@field is_text          fun(o: obj|nil): boolean\n"
+          << "---@field is_text3d        fun(o: obj|nil): boolean\n"
           << "---@field mesh_path        fun(o: obj|nil): string|nil\n"
           << "---@field sprite_path      fun(o: obj|nil): string|nil\n"
           << "---@field tilemap_path     fun(o: obj|nil): string|nil\n"
@@ -458,14 +460,25 @@ GenResult generate(const std::string& projectPath,
           << "---@field skybox_refl_path fun(o: obj|nil): string|nil\n"
           << "---@field skybox_env_path  fun(o: obj|nil): string|nil\n"
           << "---@field skybox_render_bg fun(o: obj|nil): any|nil  -- int*  (write via [0])\n"
+          << "---@field text_str         fun(o: obj|nil): string|nil\n"
+          << "---@field text_face        fun(o: obj|nil): any|nil  -- int*  (write via [0])\n"
+          << "---@field text_color       fun(o: obj|nil): any|nil  -- int*  (write via [0])\n"
+          << "---@field text_size        fun(o: obj|nil): any|nil  -- int*  (write via [0])\n"
+          << "---@field text_max_width   fun(o: obj|nil): any|nil  -- float* (write via [0])\n"
+          << "---@field text3d_str       fun(o: obj|nil): string|nil\n"
+          << "---@field text3d_scale     fun(o: obj|nil): any|nil  -- float* (write via [0])\n"
+          << "---@field text3d_color     fun(o: obj|nil): any|nil  -- uint*  (write via [0])\n"
           << "---@type engine_node\nnode = {}\n\n";
 
         // ---- scene helper module (depth-first lookup + convenience) -----
         o << "-- ===== `scene` helper module (runtime pre-loaded) =====\n"
           << "---@class engine_scene\n"
           << "---@field find_first  fun(root: obj|nil, predicate: fun(o: obj): boolean): obj|nil\n"
+          << "---@field find_all    fun(root: obj|nil, predicate: fun(o: obj): boolean): obj[]\n"
           << "---@field find_fog    fun(root: obj|nil): obj|nil\n"
           << "---@field find_skybox fun(root: obj|nil): obj|nil\n"
+          << "---@field find_text   fun(root: obj|nil): obj|nil\n"
+          << "---@field find_text3d fun(root: obj|nil): obj|nil\n"
           << "---@type engine_scene\nscene = {}\n";
     }
 

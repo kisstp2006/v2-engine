@@ -123,6 +123,8 @@ node.is_audio   = _check(_C.editor_obj_is_audio_source)
 node.is_script  = _check(_C.editor_obj_is_script)
 node.is_fog     = _check(_C.editor_obj_is_fog_settings)
 node.is_skybox  = _check(_C.editor_obj_is_skybox)
+node.is_text    = _check(_C.editor_obj_is_text_renderer)
+node.is_text3d  = _check(_C.editor_obj_is_text_renderer_3d)
 
 -- ---- Asset-path shortcuts (Lua-string, or nil) -----------------------
 local function _path(fn) return function(o)
@@ -140,6 +142,8 @@ node.script_path      = _path(_C.editor_script_path)
 node.skybox_sky_path  = _path(_C.editor_skybox_sky_path)
 node.skybox_refl_path = _path(_C.editor_skybox_refl_path)
 node.skybox_env_path  = _path(_C.editor_skybox_env_path)
+node.text_str         = _path(_C.editor_text_renderer_text)
+node.text3d_str       = _path(_C.editor_text_renderer_3d_text)
 
 -- ---- Camera-specific (dir vec3*) -------------------------------------
 function node.camera_dir(o)
@@ -215,10 +219,71 @@ function scene.find_skybox(root)
     return scene.find_first(root, node.is_skybox)
 end
 
+function scene.find_text(root)
+    return scene.find_first(root, node.is_text)
+end
+
+function scene.find_text3d(root)
+    return scene.find_first(root, node.is_text3d)
+end
+
+-- `scene.find_all(root, predicate)` collects every matching node into a table.
+-- Useful when there can be many of the same type (e.g. all Text3D labels).
+function scene.find_all(root, predicate)
+    local out = {}
+    if not root or not predicate then return out end
+    local function recurse(n)
+        if predicate(n) then out[#out + 1] = n end
+        for child in node.children(n) do recurse(child) end
+    end
+    recurse(root)
+    return out
+end
+
 -- ---- Skybox render-background toggle (int*, mutable) ------------------
 function node.skybox_render_bg(o)
     if not o then return nil end
     local p = _C.editor_skybox_render_bg_addr(o)
+    if p == nil then return nil end
+    return p
+end
+
+-- ---- TextRenderer (HUD) field-pointer accessors (mutable) ------------
+function node.text_face(o)
+    if not o then return nil end
+    local p = _C.editor_text_renderer_face_addr(o)
+    if p == nil then return nil end
+    return p
+end
+function node.text_color(o)
+    if not o then return nil end
+    local p = _C.editor_text_renderer_color_addr(o)
+    if p == nil then return nil end
+    return p
+end
+function node.text_size(o)
+    if not o then return nil end
+    local p = _C.editor_text_renderer_size_addr(o)
+    if p == nil then return nil end
+    return p
+end
+function node.text_max_width(o)
+    if not o then return nil end
+    local p = _C.editor_text_renderer_max_width_addr(o)
+    if p == nil then return nil end
+    return p
+end
+
+-- ---- Text3DRenderer field-pointer accessors (mutable) ----------------
+function node.text3d_scale(o)
+    if not o then return nil end
+    local p = _C.editor_text_renderer_3d_scale_addr(o)
+    if p == nil then return nil end
+    return p
+end
+function node.text3d_color(o)
+    if not o then return nil end
+    local p = _C.editor_text_renderer_3d_color_addr(o)
     if p == nil then return nil end
     return p
 end

@@ -130,6 +130,46 @@ API const char* editor_skybox_sky_path (const struct obj* o);
 API const char* editor_skybox_refl_path(const struct obj* o);
 API const char* editor_skybox_env_path (const struct obj* o);
 
+// New TextRenderer node — screen-space text overlay (HUD).
+// `pos.x/.y` = viewport pixel position; markup tags in `text` allowed.
+API struct obj* editor_obj_new_text_renderer(struct obj* parent,
+                                             const char* name,
+                                             const char* text);
+API int          editor_obj_is_text_renderer(const struct obj* o);
+API void         editor_text_renderer_get(const struct obj* o,
+                                          const char** out_text,
+                                          float out_pos[2],
+                                          int* out_face, int* out_color,
+                                          int* out_size, float* out_max_width);
+// Field-pointer accessors for Lua node.text_* helpers (mutable).
+API char** editor_text_renderer_text_addr     (struct obj* o);
+API int*   editor_text_renderer_face_addr     (struct obj* o);
+API int*   editor_text_renderer_color_addr    (struct obj* o);
+API int*   editor_text_renderer_size_addr     (struct obj* o);
+API float* editor_text_renderer_max_width_addr(struct obj* o);
+
+// Read-only string getter (for Lua node.text_str helper).
+API const char* editor_text_renderer_text(const struct obj* o);
+
+// New Text3DRenderer node — world-space billboard text (ddraw_text).
+// `pos.x/.y/.z` = world coords; ddraw_text auto-billboards toward the camera.
+API struct obj* editor_obj_new_text_renderer_3d(struct obj* parent,
+                                                const char* name,
+                                                const char* text);
+API int          editor_obj_is_text_renderer_3d(const struct obj* o);
+API void         editor_text_renderer_3d_get(const struct obj* o,
+                                             const char** out_text,
+                                             float out_pos[3],
+                                             float* out_scale,
+                                             unsigned* out_color);
+// Field-pointer accessors for Lua node.text3d_* helpers (mutable).
+API char**    editor_text_renderer_3d_text_addr (struct obj* o);
+API float*    editor_text_renderer_3d_scale_addr(struct obj* o);
+API unsigned* editor_text_renderer_3d_color_addr(struct obj* o);
+
+// Read-only string getter (for Lua node.text3d_str helper).
+API const char* editor_text_renderer_3d_text(const struct obj* o);
+
 // New Script node (M17). script_path can be empty/null.
 API struct obj* editor_obj_new_script         (struct obj* parent, const char* name,
                                                const char* script_path);

@@ -122,6 +122,84 @@ static obj* findSkyboxNode(obj* node) {
     return nullptr;
 }
 
+// HUD-overlay helpers — duplicated in game_panel.cpp; small enough that a
+// shared header would be over-engineered for two call sites.
+static void collectTextRenderers_scene(obj* node, std::vector<obj*>& out) {
+    if (!node) return;
+    if (editor_obj_is_text_renderer(node)) out.push_back(node);
+    int n = editor_obj_child_count(node);
+    for (int i = 0; i < n; ++i) {
+        collectTextRenderers_scene(editor_obj_child_at(node, i), out);
+    }
+}
+
+static void textRendererPrefix_scene(int face, int color, int size, char out[8]) {
+    int i = 0;
+    if (face  >= 1 && face  <= 5) out[i++] = (char)(0x10 + face - 1);
+    if (color >= 1 && color <= 6) out[i++] = (char)(0x1A + color - 1);
+    if (size  >= 1 && size  <= 6) out[i++] = (char)size;
+    out[i] = 0;
+}
+
+static void drawTextOverlays_scene(obj* root) {
+    std::vector<obj*> texts;
+    collectTextRenderers_scene(root, texts);
+    if (texts.empty()) return;
+
+    ddraw_push_2d();
+    for (obj* o : texts) {
+        const char* text = nullptr;
+        float pos[2] = {0,0};
+        int   face = 1, color = 1, size = 4;
+        float max_width = 0.f;
+        editor_text_renderer_get(o, &text, pos, &face, &color, &size, &max_width);
+        if (!text || !*text) continue;
+
+        char prefix[8];
+        textRendererPrefix_scene(face, color, size, prefix);
+        char buf[2048];
+        snprintf(buf, sizeof(buf), "%s%s", prefix, text);
+
+        font_goto(pos[0], pos[1]);
+        if (max_width > 0.f) {
+            font_clip(buf, vec4(pos[0], pos[1], max_width, 1e6f));
+        } else {
+            font_print(buf);
+        }
+    }
+    ddraw_pop_2d();
+}
+
+// ---- Text3DRenderer — world-space billboard text via ddraw_text -------------
+
+static void collectText3DRenderers_scene(obj* node, std::vector<obj*>& out) {
+    if (!node) return;
+    if (editor_obj_is_text_renderer_3d(node)) out.push_back(node);
+    int n = editor_obj_child_count(node);
+    for (int i = 0; i < n; ++i) {
+        collectText3DRenderers_scene(editor_obj_child_at(node, i), out);
+    }
+}
+
+static void drawText3DOverlays_scene(obj* root) {
+    std::vector<obj*> t3ds;
+    collectText3DRenderers_scene(root, t3ds);
+    if (t3ds.empty()) return;
+
+    for (obj* o : t3ds) {
+        const char* text = nullptr;
+        float pos[3] = {0,0,0};
+        float scale = 0.05f;
+        unsigned color = 0xFFFFFFFFu;
+        editor_text_renderer_3d_get(o, &text, pos, &scale, &color);
+        if (!text || !*text) continue;
+
+        ddraw_color(color);
+        ddraw_text(vec3(pos[0], pos[1], pos[2]), scale, text);
+    }
+    ddraw_flush();
+}
+
 skybox_t* ScenePanel::resolveSkybox(EditorApp& app) {
     obj* skyNode = findSkyboxNode(app.scene().root());
     if (!skyNode) return nullptr;
@@ -335,6 +413,11 @@ void ScenePanel::renderScene(int w, int h, bool inputAllowed, EditorApp& app) {
     }
 
     walkAndRender(app.scene().root(), app, lights, fogNode, sky);
+
+    // 3D label pass — Text3DRenderer nodes drawn in world-space via ddraw_text.
+    drawText3DOverlays_scene(app.scene().root());
+    // HUD pass — TextRenderer nodes drawn in 2D viewport-pixel space.
+    drawTextOverlays_scene(app.scene().root());
 
     // 4) Script `on_draw` callbacks (only in Play-mode). We also show in the
     // editor Scene panel so that script-effects are visible immediately

@@ -15,7 +15,10 @@
 namespace editor {
 
 REGISTER_FILE_TYPE(scene, {
-    {".scene.json5"}, "Scene",
+    // ".prefab.json5" wins via longest-match (prefab handler), so plain
+    // ".json5" reaches here only for non-prefab scenes. Both extensions are
+    // accepted so the user can name files as `level1.json5` or `level1.scene.json5`.
+    {".scene.json5", ".json5"}, "Scene",
     [](EditorApp& app, const std::string& p) { app.openScene(p); }
 })
 

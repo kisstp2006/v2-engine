@@ -42,7 +42,7 @@ bool endsWith(const std::string& p, const std::string& e) {
 const std::unordered_map<std::string, std::vector<std::string>>&
 expectedExtensions() {
     static const std::unordered_map<std::string, std::vector<std::string>> m = {
-        { "model",   { ".iqm", ".gltf", ".glb", ".fbx", ".obj" } },
+        { "model",   { ".iqm", ".gltf", ".glb" } },
         { "texture", { ".png", ".jpg", ".jpeg", ".tga", ".bmp" } },
         { "clip",    { ".ogg", ".wav", ".mp3", ".flac" } },
         { "tmx",     { ".tmx" } },

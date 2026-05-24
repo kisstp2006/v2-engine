@@ -25,7 +25,7 @@ REGISTER_FILE_TYPE(prefab, {
 })
 
 REGISTER_FILE_TYPE(mesh, {
-    {".iqm", ".gltf", ".fbx", ".obj"}, "Mesh",
+    {".iqm", ".gltf", ".glb"}, "Mesh",
     [](EditorApp& app, const std::string& p) { app.createMesh(p.c_str()); }
 })
 

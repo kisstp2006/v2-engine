@@ -152,11 +152,6 @@ void ScenePanel::renderMeshNode(obj* node, EditorApp& app,
 
     mat44 pivot;
     editor_mesh_renderer_compose_pivot(node, pivot);
-    // Auto-tick the animation at 30 Hz so skinned glTF models preview motion
-    // in the Scene viewport without scripting. No-op for static models
-    // (numframes=0 → model_animate_clip returns -1 early) and for the Step 4
-    // dummy anim (numframes=2, both frames identity).
-    model_animate(it->second, (float)(time_ss() * 30.0));
     // pass = -1 → every default pass (lighting, shading, shadow-sampling).
     model_render(&it->second, cam_.proj, cam_.view, &pivot, 1, -1);
 }
@@ -288,15 +283,14 @@ void ScenePanel::draw(EditorApp& app) {
                      ImVec2((float)w, (float)h),
                      ImVec2(0, 1), ImVec2(1, 0));
 
-        // Drop target — assets compatible with 3D (.iqm, .gltf).
+        // Drop target — 3D mesh assets (.iqm, .gltf, .glb).
         if (ImGui::BeginDragDropTarget()) {
             if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("ASSET_PATH")) {
                 std::string path((const char*)p->Data);
                 std::string ext = std::filesystem::path(path).extension().string();
                 std::transform(ext.begin(), ext.end(), ext.begin(),
                                [](unsigned char c){ return std::tolower(c); });
-                if (ext == ".iqm" || ext == ".gltf" || ext == ".glb"
-                    || ext == ".obj" || ext == ".fbx") {
+                if (ext == ".iqm" || ext == ".gltf" || ext == ".glb") {
                     app.createMesh(path.c_str());
                 } else if (ext == ".json5"
                            && path.find(".prefab.") != std::string::npos) {

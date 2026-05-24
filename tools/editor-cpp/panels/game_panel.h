@@ -31,7 +31,9 @@ private:
     void collectLights(obj* node, std::vector<light_t>& out);
     void walkAndRenderMeshes(obj* node, EditorApp& app, camera_t& cam,
                              const std::vector<light_t>& lights,
-                             obj* fogNode);
+                             obj* fogNode, skybox_t* sky);
+    // Resolve the scene's Skybox node into a cached skybox_t* (or nullptr).
+    skybox_t* resolveSkybox(EditorApp& app);
 
     fbo_t fbo_{};
     int   width_  = 0;
@@ -40,6 +42,8 @@ private:
     std::unordered_map<std::string, model_t>   modelCache_;
     std::unordered_map<std::string, texture_t> textureCache_;
     std::unordered_map<std::string, tiled_t>   tilemapCache_;
+    std::unordered_map<std::string, skybox_t>  skyboxCache_;
+    std::unordered_map<std::string, uint64_t>  skyboxMtimes_;
     AssetMtimes                                modelMtimes_;
     FailedPathSet                              failedPaths_;
 };

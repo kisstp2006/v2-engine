@@ -107,6 +107,29 @@ API float* editor_fog_settings_start_addr  (struct obj* o);
 API float* editor_fog_settings_end_addr    (struct obj* o);
 API float* editor_fog_settings_density_addr(struct obj* o);
 
+// New Skybox node — scene-wide singleton (cubemap / HDR panorama background +
+// IBL environment map for PBR materials).
+// `sky_path` is the only required field; refl/env fall back to it when empty.
+API struct obj* editor_obj_new_skybox(struct obj* parent, const char* name,
+                                      const char* sky_path);
+API int          editor_obj_is_skybox        (const struct obj* o);
+// Read all four fields at once. out-pointers may be NULL for the ones you don't need.
+// out_sky/refl/env: const char** — pointer to the stored path string (may itself be NULL).
+API void         editor_skybox_get(const struct obj* o,
+                                   const char** out_sky, const char** out_refl,
+                                   const char** out_env, int* out_render_bg);
+// Field-pointer accessors for Lua node.skybox_* helpers (mutable).
+API char** editor_skybox_sky_path_addr (struct obj* o);
+API char** editor_skybox_refl_path_addr(struct obj* o);
+API char** editor_skybox_env_path_addr (struct obj* o);
+API int*   editor_skybox_render_bg_addr(struct obj* o);
+
+// Read-only string getters (for Lua node.skybox_*_path helpers — match the
+// MeshRenderer.model_path / SpriteRenderer.texture_path pattern).
+API const char* editor_skybox_sky_path (const struct obj* o);
+API const char* editor_skybox_refl_path(const struct obj* o);
+API const char* editor_skybox_env_path (const struct obj* o);
+
 // New Script node (M17). script_path can be empty/null.
 API struct obj* editor_obj_new_script         (struct obj* parent, const char* name,
                                                const char* script_path);

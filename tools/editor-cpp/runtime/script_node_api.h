@@ -122,6 +122,7 @@ node.is_camera  = _check(_C.editor_obj_is_camera_ref)
 node.is_audio   = _check(_C.editor_obj_is_audio_source)
 node.is_script  = _check(_C.editor_obj_is_script)
 node.is_fog     = _check(_C.editor_obj_is_fog_settings)
+node.is_skybox  = _check(_C.editor_obj_is_skybox)
 
 -- ---- Asset-path shortcuts (Lua-string, or nil) -----------------------
 local function _path(fn) return function(o)
@@ -131,11 +132,14 @@ local function _path(fn) return function(o)
     return _string(p)
 end end
 
-node.mesh_path    = _path(_C.editor_mesh_renderer_path)
-node.sprite_path  = _path(_C.editor_sprite_renderer_path)
-node.tilemap_path = _path(_C.editor_tilemap_ref_path)
-node.audio_path   = _path(_C.editor_audio_source_path)
-node.script_path  = _path(_C.editor_script_path)
+node.mesh_path        = _path(_C.editor_mesh_renderer_path)
+node.sprite_path      = _path(_C.editor_sprite_renderer_path)
+node.tilemap_path     = _path(_C.editor_tilemap_ref_path)
+node.audio_path       = _path(_C.editor_audio_source_path)
+node.script_path      = _path(_C.editor_script_path)
+node.skybox_sky_path  = _path(_C.editor_skybox_sky_path)
+node.skybox_refl_path = _path(_C.editor_skybox_refl_path)
+node.skybox_env_path  = _path(_C.editor_skybox_env_path)
 
 -- ---- Camera-specific (dir vec3*) -------------------------------------
 function node.camera_dir(o)
@@ -205,6 +209,18 @@ end
 
 function scene.find_fog(root)
     return scene.find_first(root, node.is_fog)
+end
+
+function scene.find_skybox(root)
+    return scene.find_first(root, node.is_skybox)
+end
+
+-- ---- Skybox render-background toggle (int*, mutable) ------------------
+function node.skybox_render_bg(o)
+    if not o then return nil end
+    local p = _C.editor_skybox_render_bg_addr(o)
+    if p == nil then return nil end
+    return p
 end
 )LUA";
 

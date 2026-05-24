@@ -30,22 +30,26 @@ private:
     void collectLights(obj* node, std::vector<light_t>& out);
     void walkAndRender(obj* node, EditorApp& app,
                        const std::vector<light_t>& lights,
-                       obj* fogNode);
+                       obj* fogNode, skybox_t* sky);
     void renderMeshNode(obj* node, EditorApp& app,
                         const std::vector<light_t>& lights,
-                        obj* fogNode);
+                        obj* fogNode, skybox_t* sky);
     // Shadow-pass: render meshes to depth only (no lighting / shading).
     void walkShadowPass(obj* node, EditorApp& app);
     void renderMeshShadowOnly(obj* node, EditorApp& app);
+    // Resolve the scene's Skybox node into a cached skybox_t* (or nullptr).
+    skybox_t* resolveSkybox(EditorApp& app);
 
     fbo_t    fbo_{};
     camera_t cam_{};
     int      width_  = 0;
     int      height_ = 0;
 
-    std::unordered_map<std::string, model_t> modelCache_;
-    AssetMtimes                              modelMtimes_;
-    FailedPathSet                            failedPaths_;
+    std::unordered_map<std::string, model_t>   modelCache_;
+    std::unordered_map<std::string, skybox_t>  skyboxCache_;
+    std::unordered_map<std::string, uint64_t>  skyboxMtimes_;
+    AssetMtimes                                modelMtimes_;
+    FailedPathSet                              failedPaths_;
 
     // Shadowmap (M12-bonus). Lazy init on the first render-frame.
     shadowmap_t sm_{};

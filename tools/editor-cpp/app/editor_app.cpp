@@ -255,6 +255,19 @@ obj* EditorApp::createFogSettings(obj* parent) {
     return n;
 }
 
+obj* EditorApp::createSkybox(const char* sky_path, obj* parent) {
+    obj* p = parent ? parent : ensureRoot();
+    if (!p) return nullptr;
+    std::string rel = (sky_path && *sky_path)
+                    ? makeRelativeIfInside(sky_path)
+                    : std::string();
+    obj* n = editor_obj_new_skybox(p, "Skybox", rel.c_str());
+    selection_.setPrimary(n);
+    commands_.execute(std::make_unique<AddNodeCommand>(p, n, "Add Skybox"));
+    if (console_) console_->log("Created: Skybox");
+    return n;
+}
+
 obj* EditorApp::createAudioSource(const char* clip_path, obj* parent) {
     obj* p = parent ? parent : ensureRoot();
     if (!p) return nullptr;
@@ -749,6 +762,7 @@ void EditorApp::drawMenubar() {
         }
         if (ImGui::BeginMenu("Environment")) {
             if (ImGui::MenuItem("Fog")) createFogSettings();
+            if (ImGui::MenuItem("Skybox (empty path)")) createSkybox("");
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Audio")) {

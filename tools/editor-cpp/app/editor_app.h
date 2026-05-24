@@ -63,6 +63,9 @@ public:
     // New FogSettings node — scene-wide singleton (global fog parameters).
     obj* createFogSettings(obj* parent = nullptr);
 
+    // New Skybox node — scene-wide singleton (environment map background + IBL).
+    obj* createSkybox(const char* sky_path = "", obj* parent = nullptr);
+
     // Prefab — save a subtree to a file (.prefab.json5).
     void saveSelectedAsPrefab();
 

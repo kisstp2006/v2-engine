@@ -27,6 +27,9 @@ GamePanel::~GamePanel() {
         fbo_destroy(fbo_);
         fbo_ = fbo_t{};
     }
+    for (auto& kv : skyboxCache_) skybox_destroy(&kv.second);
+    skyboxCache_.clear();
+    skyboxMtimes_.clear();
 }
 
 void GamePanel::ensureFbo(int w, int h) {
@@ -75,9 +78,53 @@ static obj* findFogSettings(obj* node) {
     return nullptr;
 }
 
+static obj* findSkyboxNode(obj* node) {
+    if (!node) return nullptr;
+    if (editor_obj_is_skybox(node)) return node;
+    int n = editor_obj_child_count(node);
+    for (int i = 0; i < n; ++i) {
+        obj* r = findSkyboxNode(editor_obj_child_at(node, i));
+        if (r) return r;
+    }
+    return nullptr;
+}
+
+skybox_t* GamePanel::resolveSkybox(EditorApp& app) {
+    obj* skyNode = findSkyboxNode(app.scene().root());
+    if (!skyNode) return nullptr;
+
+    const char *skyPath = nullptr, *reflPath = nullptr, *envPath = nullptr;
+    int render_bg = 1;
+    editor_skybox_get(skyNode, &skyPath, &reflPath, &envPath, &render_bg);
+    if (!skyPath || !*skyPath) return nullptr;
+
+    std::string absSky = asset_path::toAbsolute(skyPath, app.projectPath());
+    if (!is_file(absSky.c_str())) return nullptr;
+
+    uint64_t mt_now = mtimeNs(absSky);
+    auto mt_it = skyboxMtimes_.find(absSky);
+    auto it    = skyboxCache_.find(absSky);
+    if (it != skyboxCache_.end() && mt_it != skyboxMtimes_.end() && mt_it->second != mt_now) {
+        skybox_destroy(&it->second);
+        skyboxCache_.erase(it);
+        it = skyboxCache_.end();
+    }
+    if (it == skyboxCache_.end()) {
+        std::string absRefl = (reflPath && *reflPath)
+                            ? asset_path::toAbsolute(reflPath, app.projectPath()) : absSky;
+        std::string absEnv  = (envPath && *envPath)
+                            ? asset_path::toAbsolute(envPath, app.projectPath()) : absSky;
+        skybox_t sky = skybox(absSky.c_str(), absRefl.c_str(), absEnv.c_str());
+        auto ins = skyboxCache_.emplace(absSky, sky);
+        it = ins.first;
+        skyboxMtimes_[absSky] = mt_now;
+    }
+    return &it->second;
+}
+
 void GamePanel::walkAndRenderMeshes(obj* node, EditorApp& app, camera_t& cam,
                                     const std::vector<light_t>& lights,
-                                    obj* fogNode) {
+                                    obj* fogNode, skybox_t* sky) {
     if (!node) return;
     if (editor_obj_is_mesh_renderer(node)) {
         const char* relPath = editor_mesh_renderer_path(node);
@@ -126,6 +173,15 @@ void GamePanel::walkAndRenderMeshes(obj* node, EditorApp& app, camera_t& cam,
                     vec3 black = {0,0,0};
                     model_fog(&it->second, 0u, black, 0.f, 1.f, 0.f);
                 }
+                // Skybox / IBL — bind the resolved skybox_t to the model so the
+                // PBR shader's HAS_TEX_SKY* uniforms turn on. Empty skybox if
+                // no Skybox node, so the model falls back to non-IBL shading.
+                if (sky) {
+                    model_skybox(&it->second, *sky);
+                } else {
+                    skybox_t empty = {0};
+                    model_skybox(&it->second, empty);
+                }
                 mat44 pivot;
                 editor_mesh_renderer_compose_pivot(node, pivot);
                 model_render(&it->second, cam.proj, cam.view, &pivot, 1, -1);
@@ -134,7 +190,7 @@ void GamePanel::walkAndRenderMeshes(obj* node, EditorApp& app, camera_t& cam,
     }
     int n = editor_obj_child_count(node);
     for (int i = 0; i < n; ++i) {
-        walkAndRenderMeshes(editor_obj_child_at(node, i), app, cam, lights, fogNode);
+        walkAndRenderMeshes(editor_obj_child_at(node, i), app, cam, lights, fogNode, sky);
     }
 }
 
@@ -164,7 +220,18 @@ void GamePanel::renderWithCamera(obj* cameraNode, int w, int h, EditorApp& app) 
     std::vector<light_t> lights;
     collectLights(app.scene().root(), lights);
     obj* fogNode = findFogSettings(app.scene().root());
-    walkAndRenderMeshes(app.scene().root(), app, cam, lights, fogNode);
+
+    // Skybox: resolve from the scene's Skybox node (cached + mtime-poll), render
+    // background if its render_background flag is on.
+    skybox_t* sky = resolveSkybox(app);
+    if (sky) {
+        obj* skyNode = findSkyboxNode(app.scene().root());
+        int render_bg = 1;
+        if (skyNode) editor_skybox_get(skyNode, nullptr, nullptr, nullptr, &render_bg);
+        if (render_bg) skybox_render(sky, cam.proj, cam.view);
+    }
+
+    walkAndRenderMeshes(app.scene().root(), app, cam, lights, fogNode, sky);
 
     // Script on_draw — at this point the FBO and camera are already bound, so the Lua
     // `C.ddraw_*` / `C.model_render` draws here. The ddraw_flush is needed

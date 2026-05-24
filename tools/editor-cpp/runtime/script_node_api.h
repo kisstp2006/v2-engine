@@ -121,6 +121,7 @@ node.is_light   = _check(_C.editor_obj_is_light_ref)
 node.is_camera  = _check(_C.editor_obj_is_camera_ref)
 node.is_audio   = _check(_C.editor_obj_is_audio_source)
 node.is_script  = _check(_C.editor_obj_is_script)
+node.is_fog     = _check(_C.editor_obj_is_fog_settings)
 
 -- ---- Asset-path shortcuts (Lua-string, or nil) -----------------------
 local function _path(fn) return function(o)
@@ -142,6 +143,68 @@ function node.camera_dir(o)
     local d = _C.editor_camera_ref_dir_addr(o)
     if d == nil then return nil end
     return d
+end
+
+-- ---- Fog field-pointer accessors (mutable) ---------------------------
+-- Same pattern as node.pos / node.rot / node.scale — return a pointer the
+-- script can mutate in-place. Example:
+--   local color = node.fog_color(fog)
+--   color.x = 0.5 + 0.5 * math.sin(os.clock())
+function node.fog_mode(o)
+    if not o then return nil end
+    local p = _C.editor_fog_settings_mode_addr(o)
+    if p == nil then return nil end
+    return p
+end
+function node.fog_color(o)
+    if not o then return nil end
+    local p = _C.editor_fog_settings_color_addr(o)
+    if p == nil then return nil end
+    return p
+end
+function node.fog_start(o)
+    if not o then return nil end
+    local p = _C.editor_fog_settings_start_addr(o)
+    if p == nil then return nil end
+    return p
+end
+function node.fog_end(o)
+    if not o then return nil end
+    local p = _C.editor_fog_settings_end_addr(o)
+    if p == nil then return nil end
+    return p
+end
+function node.fog_density(o)
+    if not o then return nil end
+    local p = _C.editor_fog_settings_density_addr(o)
+    if p == nil then return nil end
+    return p
+end
+
+-- ---- Scene-traversal helpers -----------------------------------------
+-- `scene.find_first(root, predicate)` is a generic depth-first search that
+-- returns the first node where `predicate(node)` is truthy.
+-- Convenience: `scene.find_fog(root)` returns the first FogSettings node.
+--
+-- Example (from a Script attached anywhere in the scene):
+--   function on_update(self, dt)
+--       local fog = scene.find_fog(node.root(self))
+--       if fog then node.fog_density(fog)[0] = 0.05 end
+--   end
+scene = scene or {}
+
+function scene.find_first(root, predicate)
+    if not root or not predicate then return nil end
+    if predicate(root) then return root end
+    for child in node.children(root) do
+        local r = scene.find_first(child, predicate)
+        if r then return r end
+    end
+    return nil
+end
+
+function scene.find_fog(root)
+    return scene.find_first(root, node.is_fog)
 end
 )LUA";
 

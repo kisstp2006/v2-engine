@@ -29,9 +29,11 @@ private:
     void renderScene(int w, int h, bool inputAllowed, EditorApp& app);
     void collectLights(obj* node, std::vector<light_t>& out);
     void walkAndRender(obj* node, EditorApp& app,
-                       const std::vector<light_t>& lights);
+                       const std::vector<light_t>& lights,
+                       obj* fogNode);
     void renderMeshNode(obj* node, EditorApp& app,
-                        const std::vector<light_t>& lights);
+                        const std::vector<light_t>& lights,
+                        obj* fogNode);
     // Shadow-pass: render meshes to depth only (no lighting / shading).
     void walkShadowPass(obj* node, EditorApp& app);
     void renderMeshShadowOnly(obj* node, EditorApp& app);

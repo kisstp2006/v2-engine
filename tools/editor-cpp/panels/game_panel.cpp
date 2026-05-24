@@ -63,8 +63,21 @@ void GamePanel::collectLights(obj* node, std::vector<light_t>& out) {
     }
 }
 
+// Depth-first lookup of the first FogSettings in the scene (NULL if none).
+static obj* findFogSettings(obj* node) {
+    if (!node) return nullptr;
+    if (editor_obj_is_fog_settings(node)) return node;
+    int n = editor_obj_child_count(node);
+    for (int i = 0; i < n; ++i) {
+        obj* r = findFogSettings(editor_obj_child_at(node, i));
+        if (r) return r;
+    }
+    return nullptr;
+}
+
 void GamePanel::walkAndRenderMeshes(obj* node, EditorApp& app, camera_t& cam,
-                                    const std::vector<light_t>& lights) {
+                                    const std::vector<light_t>& lights,
+                                    obj* fogNode) {
     if (!node) return;
     if (editor_obj_is_mesh_renderer(node)) {
         const char* relPath = editor_mesh_renderer_path(node);
@@ -98,6 +111,21 @@ void GamePanel::walkAndRenderMeshes(obj* node, EditorApp& app, camera_t& cam,
                     model_light(&it->second, 0, nullptr);
                 }
                 model_shadow(&it->second, nullptr);
+                // Per-frame fog uniforms. shader2_adduniforms (render_shader2.h:579)
+                // dedupes on type_name so this won't grow the uniform array.
+                if (fogNode) {
+                    int mode = 0; vec3 color = {0,0,0};
+                    float start = 0.f, end = 1.f, density = 0.f;
+                    editor_fog_settings_get(fogNode, &mode, &color,
+                                            &start, &end, &density);
+                    model_fog(&it->second, (unsigned)mode,
+                              color, start, end, density);
+                } else {
+                    // No scene-wide FogSettings → disable fog explicitly
+                    // (the model may have been cached with a previous setup).
+                    vec3 black = {0,0,0};
+                    model_fog(&it->second, 0u, black, 0.f, 1.f, 0.f);
+                }
                 mat44 pivot;
                 editor_mesh_renderer_compose_pivot(node, pivot);
                 model_render(&it->second, cam.proj, cam.view, &pivot, 1, -1);
@@ -106,7 +134,7 @@ void GamePanel::walkAndRenderMeshes(obj* node, EditorApp& app, camera_t& cam,
     }
     int n = editor_obj_child_count(node);
     for (int i = 0; i < n; ++i) {
-        walkAndRenderMeshes(editor_obj_child_at(node, i), app, cam, lights);
+        walkAndRenderMeshes(editor_obj_child_at(node, i), app, cam, lights, fogNode);
     }
 }
 
@@ -135,7 +163,8 @@ void GamePanel::renderWithCamera(obj* cameraNode, int w, int h, EditorApp& app) 
 
     std::vector<light_t> lights;
     collectLights(app.scene().root(), lights);
-    walkAndRenderMeshes(app.scene().root(), app, cam, lights);
+    obj* fogNode = findFogSettings(app.scene().root());
+    walkAndRenderMeshes(app.scene().root(), app, cam, lights, fogNode);
 
     // Script on_draw — at this point the FBO and camera are already bound, so the Lua
     // `C.ddraw_*` / `C.model_render` draws here. The ddraw_flush is needed

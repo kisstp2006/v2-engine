@@ -86,6 +86,27 @@ API void         editor_audio_source_get_params(const struct obj* o,
                                                 int* out_loop,
                                                 int* out_spatial);
 
+// New FogSettings node — scene-wide singleton with global fog parameters.
+// The 3D Scene/Game render-walks pick up the first FogSettings in the scene
+// and apply `model_fog()` on every MeshRenderer.
+API struct obj* editor_obj_new_fog_settings(struct obj* parent, const char* name);
+API int          editor_obj_is_fog_settings   (const struct obj* o);
+// Out-parameters: caller allocates int + vec3 + 3 floats. void* on the vec3
+// so this header doesn't need to depend on engine.h's vec3 type.
+API void         editor_fog_settings_get(const struct obj* o,
+                                         int* out_mode, void* out_color_vec3,
+                                         float* out_start, float* out_end,
+                                         float* out_density);
+
+// Field-pointer accessors (mutable, like editor_obj_pos_addr). NULL if absent.
+// Used by the Lua node.fog_* helpers so scripts can mutate a fog parameter
+// in-place without going through a full setter call.
+API int*   editor_fog_settings_mode_addr   (struct obj* o);
+API vec3*  editor_fog_settings_color_addr  (struct obj* o);
+API float* editor_fog_settings_start_addr  (struct obj* o);
+API float* editor_fog_settings_end_addr    (struct obj* o);
+API float* editor_fog_settings_density_addr(struct obj* o);
+
 // New Script node (M17). script_path can be empty/null.
 API struct obj* editor_obj_new_script         (struct obj* parent, const char* name,
                                                const char* script_path);

@@ -60,6 +60,9 @@ public:
     // New AudioSource node. clip_path may be empty/null.
     obj* createAudioSource(const char* clip_path = "", obj* parent = nullptr);
 
+    // New FogSettings node — scene-wide singleton (global fog parameters).
+    obj* createFogSettings(obj* parent = nullptr);
+
     // Prefab — save a subtree to a file (.prefab.json5).
     void saveSelectedAsPrefab();
 

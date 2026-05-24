@@ -30,7 +30,8 @@ private:
     void renderWithCamera(obj* cameraNode, int w, int h, EditorApp& app);
     void collectLights(obj* node, std::vector<light_t>& out);
     void walkAndRenderMeshes(obj* node, EditorApp& app, camera_t& cam,
-                             const std::vector<light_t>& lights);
+                             const std::vector<light_t>& lights,
+                             obj* fogNode);
 
     fbo_t fbo_{};
     int   width_  = 0;

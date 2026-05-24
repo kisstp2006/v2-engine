@@ -96,8 +96,21 @@ void editorFreefly(camera_t* cam, bool blocked) {
 
 }  // namespace
 
+// Depth-first lookup of the first FogSettings in the scene (NULL if none).
+static obj* findFogSettings(obj* node) {
+    if (!node) return nullptr;
+    if (editor_obj_is_fog_settings(node)) return node;
+    int n = editor_obj_child_count(node);
+    for (int i = 0; i < n; ++i) {
+        obj* r = findFogSettings(editor_obj_child_at(node, i));
+        if (r) return r;
+    }
+    return nullptr;
+}
+
 void ScenePanel::renderMeshNode(obj* node, EditorApp& app,
-                                const std::vector<light_t>& lights) {
+                                const std::vector<light_t>& lights,
+                                obj* fogNode) {
     const char* relPath = editor_mesh_renderer_path(node);
     if (!relPath || !*relPath) return;
 
@@ -150,6 +163,20 @@ void ScenePanel::renderMeshNode(obj* node, EditorApp& app,
     model_shadow(&it->second, nullptr);
     (void)lights;
 
+    // Per-frame fog uniforms. shader2_adduniforms dedupes on type_name so this
+    // doesn't grow the model's uniform array.
+    if (fogNode) {
+        int mode = 0; vec3 color = {0,0,0};
+        float start = 0.f, end = 1.f, density = 0.f;
+        editor_fog_settings_get(fogNode, &mode, &color, &start, &end, &density);
+        model_fog(&it->second, (unsigned)mode, color, start, end, density);
+    } else {
+        // No scene-wide FogSettings → explicitly disable fog (the model may
+        // have been cached with a previous setup).
+        vec3 black = {0,0,0};
+        model_fog(&it->second, 0u, black, 0.f, 1.f, 0.f);
+    }
+
     mat44 pivot;
     editor_mesh_renderer_compose_pivot(node, pivot);
     // pass = -1 → every default pass (lighting, shading, shadow-sampling).
@@ -194,14 +221,15 @@ void ScenePanel::collectLights(obj* node, std::vector<light_t>& out) {
 }
 
 void ScenePanel::walkAndRender(obj* node, EditorApp& app,
-                               const std::vector<light_t>& lights) {
+                               const std::vector<light_t>& lights,
+                               obj* fogNode) {
     if (!node) return;
     if (editor_obj_is_mesh_renderer(node)) {
-        renderMeshNode(node, app, lights);
+        renderMeshNode(node, app, lights, fogNode);
     }
     int n = editor_obj_child_count(node);
     for (int i = 0; i < n; ++i) {
-        walkAndRender(editor_obj_child_at(node, i), app, lights);
+        walkAndRender(editor_obj_child_at(node, i), app, lights, fogNode);
     }
 }
 
@@ -230,8 +258,9 @@ void ScenePanel::renderScene(int w, int h, bool inputAllowed, EditorApp& app) {
     // `cast_shadows` field is handed to the motor as hardcoded false by
     // `editor_light_ref_to_light_t`, so shadowmap_* doesn't run here either. Fix in M16+.
 
-    // 3) main render pass — with lights + shadowmap.
-    walkAndRender(app.scene().root(), app, lights);
+    // 3) main render pass — with lights + shadowmap + fog.
+    obj* fogNode = findFogSettings(app.scene().root());
+    walkAndRender(app.scene().root(), app, lights, fogNode);
 
     // 4) Script `on_draw` callbacks (only in Play-mode). We also show in the
     // editor Scene panel so that script-effects are visible immediately

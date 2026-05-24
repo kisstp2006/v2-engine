@@ -245,6 +245,16 @@ obj* EditorApp::createCamera(obj* parent) {
     return n;
 }
 
+obj* EditorApp::createFogSettings(obj* parent) {
+    obj* p = parent ? parent : ensureRoot();
+    if (!p) return nullptr;
+    obj* n = editor_obj_new_fog_settings(p, "Fog");
+    selection_.setPrimary(n);
+    commands_.execute(std::make_unique<AddNodeCommand>(p, n, "Add Fog"));
+    if (console_) console_->log("Created: Fog");
+    return n;
+}
+
 obj* EditorApp::createAudioSource(const char* clip_path, obj* parent) {
     obj* p = parent ? parent : ensureRoot();
     if (!p) return nullptr;
@@ -735,6 +745,10 @@ void EditorApp::drawMenubar() {
         }
         if (ImGui::BeginMenu("Camera")) {
             if (ImGui::MenuItem("Camera")) createCamera();
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Environment")) {
+            if (ImGui::MenuItem("Fog")) createFogSettings();
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Audio")) {

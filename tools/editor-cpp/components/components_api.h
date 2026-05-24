@@ -163,8 +163,10 @@ API void         editor_text_renderer_3d_get(const struct obj* o,
                                              float* out_scale,
                                              unsigned* out_color);
 // Field-pointer accessors for Lua node.text3d_* helpers (mutable).
+// Note: scale is the standard TRS scale — use node.scale(o) instead of a
+// dedicated text3d_scale helper. The render-walk uses scale.x as a uniform
+// size multiplier.
 API char**    editor_text_renderer_3d_text_addr (struct obj* o);
-API float*    editor_text_renderer_3d_scale_addr(struct obj* o);
 API unsigned* editor_text_renderer_3d_color_addr(struct obj* o);
 
 // Read-only string getter (for Lua node.text3d_str helper).
@@ -195,6 +197,7 @@ API vec3* editor_tilemap_ref_pos_addr    (struct obj* o);
 API vec3* editor_light_ref_pos_addr      (struct obj* o);
 API vec3* editor_camera_ref_pos_addr     (struct obj* o);
 API vec3* editor_audio_source_pos_addr   (struct obj* o);
+API vec3* editor_text_renderer_3d_pos_addr(struct obj* o);
 
 // Rot+scale pointer-access (M15 — rotate/scale gizmo). NULL if absent.
 API vec3* editor_transform_rot_addr      (struct obj* o);
@@ -205,6 +208,8 @@ API vec3* editor_sprite_renderer_rot_addr  (struct obj* o);
 API vec3* editor_sprite_renderer_scale_addr(struct obj* o);
 API vec3* editor_tilemap_ref_rot_addr    (struct obj* o);
 API vec3* editor_tilemap_ref_scale_addr  (struct obj* o);
+API vec3* editor_text_renderer_3d_rot_addr  (struct obj* o);
+API vec3* editor_text_renderer_3d_scale_addr(struct obj* o);
 API vec3* editor_obj_rot_addr            (struct obj* o);
 API vec3* editor_obj_scale_addr          (struct obj* o);
 

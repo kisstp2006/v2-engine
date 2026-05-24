@@ -275,12 +275,8 @@ function node.text_max_width(o)
 end
 
 -- ---- Text3DRenderer field-pointer accessors (mutable) ----------------
-function node.text3d_scale(o)
-    if not o then return nil end
-    local p = _C.editor_text_renderer_3d_scale_addr(o)
-    if p == nil then return nil end
-    return p
-end
+-- Use `node.scale(o)` for the size — Text3D's scale.x is the uniform
+-- ddraw_text size multiplier. Only the color override is exposed here.
 function node.text3d_color(o)
     if not o then return nil end
     local p = _C.editor_text_renderer_3d_color_addr(o)

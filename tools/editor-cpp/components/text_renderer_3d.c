@@ -14,21 +14,24 @@
 #include "components_api.h"
 #include "component_macros.h"
 
+// pos/rot/scale come from COMPONENT_TRS (consistent with Mesh/Sprite/Tilemap).
+// - pos:   world-space label position
+// - rot:   ignored (ddraw_text always billboards toward the camera)
+// - scale: ddraw_text wants a single float — we use scale.x as the size
+//          multiplier. Default scale = (0.05, 0.05, 0.05).
 typedef struct Text3DRenderer {
     OBJ
-    COMPONENT_POS              // world-space x/y/z
+    COMPONENT_TRS
     char*    text;             // text to draw (no markup; ddraw_text is plain)
-    float    scale;            // ddraw_text size factor (small — try 0.05f)
     unsigned color;            // 0xRRGGBBAA — tagged "rgba" for color-picker
 } Text3DRenderer;
 
 OBJTYPEDEF(Text3DRenderer, 75);
 
 AUTORUN {
-    STRUCT_POS(Text3DRenderer);
-    STRUCT(Text3DRenderer, char*,    text,  "[multiline]");
-    STRUCT(Text3DRenderer, float,    scale, "[range 0.001 5]");
-    STRUCT(Text3DRenderer, rgba,     color);
+    STRUCT_TRS(Text3DRenderer);
+    STRUCT(Text3DRenderer, char*, text,  "[multiline]");
+    STRUCT(Text3DRenderer, rgba,  color);
 }
 
 obj* editor_obj_new_text_renderer_3d(obj* parent, const char* name,
@@ -40,12 +43,14 @@ obj* editor_obj_new_text_renderer_3d(obj* parent, const char* name,
     } else {
         t->text = STRDUP("Hello, world!");
     }
-    t->scale = 0.05f;
+    t->scale.x = 0.05f;
+    t->scale.y = 0.05f;
+    t->scale.z = 0.05f;
     t->color = 0xFFFFFFFFu;   // white
     return (obj*)t;
 }
 
-EDITOR_COMPONENT_POS_ONLY(Text3DRenderer, text_renderer_3d)
+EDITOR_COMPONENT_BASE(Text3DRenderer, text_renderer_3d)
 
 void editor_text_renderer_3d_get(const obj* o,
                                  const char** out_text,
@@ -56,17 +61,13 @@ void editor_text_renderer_3d_get(const obj* o,
     const Text3DRenderer* t = (const Text3DRenderer*)o;
     if (out_text)  *out_text  = t->text;
     if (out_pos) { out_pos[0] = t->pos.x; out_pos[1] = t->pos.y; out_pos[2] = t->pos.z; }
-    if (out_scale) *out_scale = t->scale;
+    if (out_scale) *out_scale = t->scale.x;   // uniform scale assumption
     if (out_color) *out_color = t->color;
 }
 
 char** editor_text_renderer_3d_text_addr(obj* o) {
     if (!editor_obj_is_text_renderer_3d(o)) return NULL;
     return &((Text3DRenderer*)o)->text;
-}
-float* editor_text_renderer_3d_scale_addr(obj* o) {
-    if (!editor_obj_is_text_renderer_3d(o)) return NULL;
-    return &((Text3DRenderer*)o)->scale;
 }
 unsigned* editor_text_renderer_3d_color_addr(obj* o) {
     if (!editor_obj_is_text_renderer_3d(o)) return NULL;

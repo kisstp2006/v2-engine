@@ -28,13 +28,14 @@ obj* editor_obj_child_at(const obj* parent, int i) {
 
 vec3* editor_obj_pos_addr(obj* o) {
     vec3* p;
-    if ((p = editor_transform_pos_addr(o)))       return p;
-    if ((p = editor_mesh_renderer_pos_addr(o)))   return p;
-    if ((p = editor_sprite_renderer_pos_addr(o))) return p;
-    if ((p = editor_tilemap_ref_pos_addr(o)))     return p;
-    if ((p = editor_light_ref_pos_addr(o)))       return p;
-    if ((p = editor_camera_ref_pos_addr(o)))      return p;
-    if ((p = editor_audio_source_pos_addr(o)))    return p;
+    if ((p = editor_transform_pos_addr(o)))         return p;
+    if ((p = editor_mesh_renderer_pos_addr(o)))     return p;
+    if ((p = editor_sprite_renderer_pos_addr(o)))   return p;
+    if ((p = editor_tilemap_ref_pos_addr(o)))       return p;
+    if ((p = editor_light_ref_pos_addr(o)))         return p;
+    if ((p = editor_camera_ref_pos_addr(o)))        return p;
+    if ((p = editor_audio_source_pos_addr(o)))      return p;
+    if ((p = editor_text_renderer_3d_pos_addr(o)))  return p;
     return NULL;
 }
 
@@ -51,19 +52,21 @@ int editor_obj_is_3d_component(const obj* o) {
 
 vec3* editor_obj_rot_addr(obj* o) {
     vec3* p;
-    if ((p = editor_transform_rot_addr(o)))       return p;
-    if ((p = editor_mesh_renderer_rot_addr(o)))   return p;
-    if ((p = editor_sprite_renderer_rot_addr(o))) return p;
-    if ((p = editor_tilemap_ref_rot_addr(o)))     return p;
-    return NULL;   /* LightRef has no rot */
+    if ((p = editor_transform_rot_addr(o)))         return p;
+    if ((p = editor_mesh_renderer_rot_addr(o)))     return p;
+    if ((p = editor_sprite_renderer_rot_addr(o)))   return p;
+    if ((p = editor_tilemap_ref_rot_addr(o)))       return p;
+    if ((p = editor_text_renderer_3d_rot_addr(o)))  return p;
+    return NULL;   /* LightRef / TextRenderer (2D HUD) have no rot */
 }
 
 vec3* editor_obj_scale_addr(obj* o) {
     vec3* p;
-    if ((p = editor_transform_scale_addr(o)))       return p;
-    if ((p = editor_mesh_renderer_scale_addr(o)))   return p;
-    if ((p = editor_sprite_renderer_scale_addr(o))) return p;
-    if ((p = editor_tilemap_ref_scale_addr(o)))     return p;
+    if ((p = editor_transform_scale_addr(o)))         return p;
+    if ((p = editor_mesh_renderer_scale_addr(o)))     return p;
+    if ((p = editor_sprite_renderer_scale_addr(o)))   return p;
+    if ((p = editor_tilemap_ref_scale_addr(o)))       return p;
+    if ((p = editor_text_renderer_3d_scale_addr(o))) return p;
     return NULL;
 }
 

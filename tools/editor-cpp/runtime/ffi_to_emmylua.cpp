@@ -466,8 +466,8 @@ GenResult generate(const std::string& projectPath,
           << "---@field text_size        fun(o: obj|nil): any|nil  -- int*  (write via [0])\n"
           << "---@field text_max_width   fun(o: obj|nil): any|nil  -- float* (write via [0])\n"
           << "---@field text3d_str       fun(o: obj|nil): string|nil\n"
-          << "---@field text3d_scale     fun(o: obj|nil): any|nil  -- float* (write via [0])\n"
           << "---@field text3d_color     fun(o: obj|nil): any|nil  -- uint*  (write via [0])\n"
+          << "                                                    -- (use node.scale(o) for size; scale.x is uniform)\n"
           << "---@type engine_node\nnode = {}\n\n";
 
         // ---- scene helper module (depth-first lookup + convenience) -----

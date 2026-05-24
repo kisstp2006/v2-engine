@@ -420,32 +420,53 @@ GenResult generate(const std::string& projectPath,
 
         // ---- node helper module (in sync with script_node_api.h) -------
         // These are runtime-pre-loaded Lua shortcuts in the Script-VMs.
+        // Scalar field-pointer return types (int*, float*) are marked `any|nil`;
+        // mutate them with `p[0] = value` in Lua.
         o << "-- ===== `node` helper module (runtime pre-loaded) =====\n"
           << "---@class engine_node\n"
-          << "---@field pos          fun(o: obj|nil): vec3|nil\n"
-          << "---@field rot          fun(o: obj|nil): vec3|nil\n"
-          << "---@field scale        fun(o: obj|nil): vec3|nil\n"
-          << "---@field parent       fun(o: obj|nil): obj|nil\n"
-          << "---@field root         fun(o: obj|nil): obj|nil\n"
-          << "---@field name         fun(o: obj|nil): string|nil\n"
-          << "---@field type         fun(o: obj|nil): string|nil\n"
-          << "---@field child_count  fun(o: obj|nil): integer\n"
-          << "---@field child_at     fun(o: obj|nil, i: integer): obj|nil\n"
-          << "---@field children     fun(o: obj|nil): fun(): obj|nil\n"
-          << "---@field is_mesh      fun(o: obj|nil): boolean\n"
-          << "---@field is_sprite    fun(o: obj|nil): boolean\n"
-          << "---@field is_tilemap   fun(o: obj|nil): boolean\n"
-          << "---@field is_light     fun(o: obj|nil): boolean\n"
-          << "---@field is_camera    fun(o: obj|nil): boolean\n"
-          << "---@field is_audio     fun(o: obj|nil): boolean\n"
-          << "---@field is_script    fun(o: obj|nil): boolean\n"
-          << "---@field mesh_path    fun(o: obj|nil): string|nil\n"
-          << "---@field sprite_path  fun(o: obj|nil): string|nil\n"
-          << "---@field tilemap_path fun(o: obj|nil): string|nil\n"
-          << "---@field audio_path   fun(o: obj|nil): string|nil\n"
-          << "---@field script_path  fun(o: obj|nil): string|nil\n"
-          << "---@field camera_dir   fun(o: obj|nil): vec3|nil\n"
-          << "---@type engine_node\nnode = {}\n";
+          << "---@field pos              fun(o: obj|nil): vec3|nil\n"
+          << "---@field rot              fun(o: obj|nil): vec3|nil\n"
+          << "---@field scale            fun(o: obj|nil): vec3|nil\n"
+          << "---@field parent           fun(o: obj|nil): obj|nil\n"
+          << "---@field root             fun(o: obj|nil): obj|nil\n"
+          << "---@field name             fun(o: obj|nil): string|nil\n"
+          << "---@field type             fun(o: obj|nil): string|nil\n"
+          << "---@field child_count      fun(o: obj|nil): integer\n"
+          << "---@field child_at         fun(o: obj|nil, i: integer): obj|nil\n"
+          << "---@field children         fun(o: obj|nil): fun(): obj|nil\n"
+          << "---@field is_mesh          fun(o: obj|nil): boolean\n"
+          << "---@field is_sprite        fun(o: obj|nil): boolean\n"
+          << "---@field is_tilemap       fun(o: obj|nil): boolean\n"
+          << "---@field is_light         fun(o: obj|nil): boolean\n"
+          << "---@field is_camera        fun(o: obj|nil): boolean\n"
+          << "---@field is_audio         fun(o: obj|nil): boolean\n"
+          << "---@field is_script        fun(o: obj|nil): boolean\n"
+          << "---@field is_fog           fun(o: obj|nil): boolean\n"
+          << "---@field is_skybox        fun(o: obj|nil): boolean\n"
+          << "---@field mesh_path        fun(o: obj|nil): string|nil\n"
+          << "---@field sprite_path      fun(o: obj|nil): string|nil\n"
+          << "---@field tilemap_path     fun(o: obj|nil): string|nil\n"
+          << "---@field audio_path       fun(o: obj|nil): string|nil\n"
+          << "---@field script_path      fun(o: obj|nil): string|nil\n"
+          << "---@field camera_dir       fun(o: obj|nil): vec3|nil\n"
+          << "---@field fog_mode         fun(o: obj|nil): any|nil  -- int*  (write via [0])\n"
+          << "---@field fog_color        fun(o: obj|nil): vec3|nil\n"
+          << "---@field fog_start        fun(o: obj|nil): any|nil  -- float* (write via [0])\n"
+          << "---@field fog_end          fun(o: obj|nil): any|nil  -- float* (write via [0])\n"
+          << "---@field fog_density      fun(o: obj|nil): any|nil  -- float* (write via [0])\n"
+          << "---@field skybox_sky_path  fun(o: obj|nil): string|nil\n"
+          << "---@field skybox_refl_path fun(o: obj|nil): string|nil\n"
+          << "---@field skybox_env_path  fun(o: obj|nil): string|nil\n"
+          << "---@field skybox_render_bg fun(o: obj|nil): any|nil  -- int*  (write via [0])\n"
+          << "---@type engine_node\nnode = {}\n\n";
+
+        // ---- scene helper module (depth-first lookup + convenience) -----
+        o << "-- ===== `scene` helper module (runtime pre-loaded) =====\n"
+          << "---@class engine_scene\n"
+          << "---@field find_first  fun(root: obj|nil, predicate: fun(o: obj): boolean): obj|nil\n"
+          << "---@field find_fog    fun(root: obj|nil): obj|nil\n"
+          << "---@field find_skybox fun(root: obj|nil): obj|nil\n"
+          << "---@type engine_scene\nscene = {}\n";
     }
 
     // 4b) .luarc.json
@@ -462,7 +483,7 @@ GenResult generate(const std::string& projectPath,
           << "        \"checkThirdParty\": false\n"
           << "    },\n"
           << "    \"diagnostics\": {\n"
-          << "        \"globals\": [\"C\", \"self\", \"node\", \"deg2rad\", \"rad2deg\"]\n"
+          << "        \"globals\": [\"C\", \"self\", \"node\", \"scene\", \"deg2rad\", \"rad2deg\"]\n"
           << "    }\n"
           << "}\n";
     }
@@ -476,7 +497,7 @@ GenResult generate(const std::string& projectPath,
               << "    \"Lua.runtime.version\": \"LuaJIT\",\n"
               << "    \"Lua.workspace.library\": [\"${workspaceFolder}/.luarc\"],\n"
               << "    \"Lua.workspace.checkThirdParty\": false,\n"
-              << "    \"Lua.diagnostics.globals\": [\"C\", \"self\", \"node\"]\n"
+              << "    \"Lua.diagnostics.globals\": [\"C\", \"self\", \"node\", \"scene\"]\n"
               << "}\n";
         } else {
             r.vscodePath.clear();  // failure mark — don't mislead the Console

@@ -21,6 +21,7 @@
 #include "../commands/command.h"
 #include "../components/components_api.h"
 #include "../core/selection_service.h"
+#include "../persistence/material_override_io.h"
 #include "../runtime/script_host.h"
 #include "../scene/scene_helpers.h"
 #include "../scene/scene_service.h"
@@ -327,6 +328,9 @@ void ScenePanel::renderMeshNode(obj* node, EditorApp& app,
         skybox_t empty = {0};
         model_skybox(&it->second, empty);
     }
+    // Material overrides (Blokk 2.5) — per-slot asset-ref + inline overlay.
+    material_override_io::applyOverridesToModel(
+        node, &it->second, app.projectPath());
 
     mat44 pivot;
     editor_mesh_renderer_compose_pivot(node, pivot);

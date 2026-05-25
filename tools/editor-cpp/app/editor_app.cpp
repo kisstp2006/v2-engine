@@ -24,6 +24,8 @@
 #include "../persistence/scene_io.h"
 #include "../persistence/postfx_state_io.h"
 #include "../persistence/material_asset_io.h"
+#include "../persistence/material_override_io.h"
+#include "../runtime/gltf_asset_extractor.h"
 #include "../runtime/script_host.h"
 #include "../runtime/cook_runner.h"
 #include "../runtime/asset_validator.h"
@@ -36,6 +38,8 @@ EditorApp::EditorApp(std::string projectPath)
     : projectPath_(std::move(projectPath)) {
     buildPanels();
     wireUp();
+    // Extra-serializers (Blokk 2). Idempotent — safe to call every ctor.
+    material_override_io::registerSerializer();
     // PostFX shaders: load every `<project>/assets/fx/*.glsl` once at startup
     // so the engine's `fx_*` API has the passes available the moment a
     // PostFXStack node turns on. No-op if the project has no assets/fx/.
@@ -102,6 +106,58 @@ obj* EditorApp::createMesh(const char* model_path, obj* parent) {
     obj* n = editor_obj_new_mesh_renderer(p, "Mesh", rel.c_str());
     selection_.setPrimary(n);
     commands_.execute(std::make_unique<AddNodeCommand>(p, n, "Add Mesh"));
+
+    // Blokk 2.8 — glTF Full Auto-Import: for .gltf/.glb assets, extract
+    // textures + generate .mat.json5 assets + auto-link MaterialOverride for
+    // every material slot. Skip-if-exists on .mat.json5 (don't clobber user
+    // edits on re-import); textures always overwrite (the glTF is the source
+    // of truth for raw bytes).
+    auto isGltfExtension = [](const char* path) {
+        if (!path) return false;
+        size_t n = strlen(path);
+        if (n < 5) return false;
+        auto endsWith = [&](const char* ext) {
+            size_t e = strlen(ext);
+            if (n < e) return false;
+            for (size_t i = 0; i < e; ++i) {
+                if (tolower((unsigned char)path[n - e + i]) != ext[i]) return false;
+            }
+            return true;
+        };
+        return endsWith(".gltf") || endsWith(".glb");
+    };
+
+    if (model_path && *model_path && isGltfExtension(model_path)) {
+        auto er = gltf_asset_extractor::extractGltfAssets(
+            model_path, projectPath_);
+        if (!er.error.empty()) {
+            bus_.emit(kEvtLogError,
+                std::string("[gltf-import] ") + er.error);
+        } else {
+            // Auto-link each generated material to a MaterialOverride on
+            // the spawned MeshRenderer (asset-ref mode, mask=0). The render-
+            // walk picks these up next frame via material_override_io.
+            for (auto& gm : er.materials) {
+                obj* mo = editor_obj_new_material_override(gm.slotName.c_str());
+                editor_material_override_set_asset_path(mo,
+                    gm.assetRelPath.c_str());
+                editor_mesh_renderer_add_override(n, mo);
+            }
+            if (console_) {
+                char buf[200];
+                snprintf(buf, sizeof(buf),
+                    "[gltf-import] extracted %d textures, %zu materials "
+                    "(%d skipped existing)",
+                    er.textures_written, er.materials.size(),
+                    er.materials_skipped_existing);
+                console_->log(buf);
+                for (auto& w : er.warnings) {
+                    console_->log(std::string("[gltf-import] ") + w);
+                }
+            }
+        }
+    }
+
     if (console_) {
         std::string msg = "Created: Mesh";
         if (!rel.empty()) { msg += " ("; msg += rel; msg += ")"; }

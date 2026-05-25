@@ -62,7 +62,18 @@ bool drawTextureChannel(material_t* m,
             if (absPath && *absPath) {
                 std::string rel = asset_path::toProjectRelative(
                     absPath, projectRoot);
-                // texname is 32 bytes — truncate if the project path is long.
+                // texname is char[32] (engine limit). If the file lives in
+                // `assets/textures/`, store the bare filename — load-time
+                // re-prefixes that root. Only fall back to project-relative
+                // for files outside the conventional location, and warn if
+                // the result still overflows.
+                static const char kTexRoot[] = "assets/textures/";
+                if (rel.size() > sizeof(kTexRoot) - 1 &&
+                    rel.compare(0, sizeof(kTexRoot) - 1, kTexRoot) == 0 &&
+                    rel.find('/', sizeof(kTexRoot) - 1) == std::string::npos) {
+                    // assets/textures/foo.png (no further subfolder) → "foo.png"
+                    rel = rel.substr(sizeof(kTexRoot) - 1);
+                }
                 strncpy(L->texname, rel.c_str(), sizeof(L->texname) - 1);
                 L->texname[sizeof(L->texname) - 1] = 0;
                 changed = true;

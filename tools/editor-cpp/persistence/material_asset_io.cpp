@@ -208,9 +208,24 @@ bool loadMaterial(const std::string& path,
                 // Load the texture (if any) into colormap_t.texture. The path
                 // is project-relative — resolve to abs for the texture loader.
                 if (texname[0]) {
+                    // `texname` may be either a project-relative path
+                    // ("assets/textures/foo.png") OR a bare filename
+                    // ("foo.png" — common with the glTF-extractor, since
+                    // material_layer_t.texname is char[32] and the bare
+                    // filename is the only thing that reliably fits).
+                    // Bare filenames implicitly resolve to
+                    // <project>/assets/textures/<filename>.
+                    std::string resolved;
+                    if (strchr(texname, '/') || strchr(texname, '\\')) {
+                        resolved = texname;     // explicit project-rel path
+                    } else if (!projectRoot.empty()) {
+                        resolved = std::string("assets/textures/") + texname;
+                    } else {
+                        resolved = texname;
+                    }
                     std::string abs = projectRoot.empty()
-                        ? std::string(texname)
-                        : asset_path::toAbsolute(texname, projectRoot);
+                        ? resolved
+                        : asset_path::toAbsolute(resolved, projectRoot);
                     colormap(&layer->map, abs.c_str(), isAlbedoOrEmissive(chIdx));
                 }
             }

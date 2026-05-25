@@ -16,6 +16,7 @@
 #include "../app/editor_app.h"
 #include "../app/panel_registry.h"
 #include "../components/components_api.h"
+#include "../persistence/material_override_io.h"
 #include "../runtime/script_host.h"
 #include "../scene/scene_helpers.h"
 #include "../scene/scene_service.h"
@@ -286,6 +287,10 @@ void GamePanel::walkAndRenderMeshes(obj* node, EditorApp& app, camera_t& cam,
                     skybox_t empty = {0};
                     model_skybox(&it->second, empty);
                 }
+                // Material overrides (Blokk 2.5) — apply per-slot asset-ref +
+                // inline overlay before model_render. Idempotent (cache-friendly).
+                material_override_io::applyOverridesToModel(
+                    node, &it->second, app.projectPath());
                 mat44 pivot;
                 editor_mesh_renderer_compose_pivot(node, pivot);
                 // Skinned-glTF Y-flip compensation: the loader leaves the

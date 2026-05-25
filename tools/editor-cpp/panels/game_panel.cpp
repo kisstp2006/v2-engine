@@ -293,12 +293,13 @@ void GamePanel::walkAndRenderMeshes(obj* node, EditorApp& app, camera_t& cam,
                     node, &it->second, app.projectPath());
                 mat44 pivot;
                 editor_mesh_renderer_compose_pivot(node, pivot);
-                // Skinned-glTF Y-flip compensation: the loader leaves the
-                // vertex in glTF-native Y-up so the skinning math is clean,
-                // and we apply the Y-flip here on the model pivot instead.
+                // Skinned-glTF X+Y flip compensation (= 180° around Z):
+                // the loader leaves the vertex in glTF-native space so the
+                // skinning math is clean, and we apply the same flip here
+                // on the model pivot instead.
                 if (it->second.flags & MODEL_GLTF_SKINNED) {
-                    mat44 yflip; id44(yflip); yflip[5] = -1.0f;
-                    mat44 tmp; multiply44x2(tmp, pivot, yflip);
+                    mat44 zrot180; id44(zrot180); zrot180[0] = -1.0f; zrot180[5] = -1.0f;
+                    mat44 tmp; multiply44x2(tmp, pivot, zrot180);
                     memcpy(pivot, tmp, sizeof(mat44));
                 }
                 model_render(&it->second, cam.proj, cam.view, &pivot, 1, -1);

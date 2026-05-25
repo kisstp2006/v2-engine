@@ -57,4 +57,15 @@ REGISTER_FILE_TYPE(audio, {
     [](EditorApp& app, const std::string& p) { app.createAudioSource(p.c_str()); }
 })
 
+// Material asset — `.mat.json5` is just the label here; the Inspector's
+// asset-preview switches into material-editor mode on its own (via the
+// extension check in asset_preview.cpp). No double-click spawn: a material
+// is referenced by a MaterialOverride on a MeshRenderer (Fázis 2.4+),
+// not spawned as a scene node on its own. Empty action = the Spawn button
+// in the preview is disabled, which is the desired UX.
+REGISTER_FILE_TYPE(material, {
+    {".mat.json5"}, "Material",
+    nullptr
+})
+
 }  // namespace editor

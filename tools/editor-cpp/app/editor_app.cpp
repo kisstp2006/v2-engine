@@ -23,6 +23,9 @@
 #include "../components/components_api.h"
 #include "../persistence/scene_io.h"
 #include "../persistence/postfx_state_io.h"
+#include "../persistence/material_asset_io.h"
+#include "../persistence/material_override_io.h"
+#include "../runtime/gltf_asset_extractor.h"
 #include "../runtime/script_host.h"
 #include "../runtime/cook_runner.h"
 #include "../runtime/asset_validator.h"
@@ -35,6 +38,8 @@ EditorApp::EditorApp(std::string projectPath)
     : projectPath_(std::move(projectPath)) {
     buildPanels();
     wireUp();
+    // Extra-serializers (Blokk 2). Idempotent — safe to call every ctor.
+    material_override_io::registerSerializer();
     // PostFX shaders: load every `<project>/assets/fx/*.glsl` once at startup
     // so the engine's `fx_*` API has the passes available the moment a
     // PostFXStack node turns on. No-op if the project has no assets/fx/.
@@ -101,6 +106,58 @@ obj* EditorApp::createMesh(const char* model_path, obj* parent) {
     obj* n = editor_obj_new_mesh_renderer(p, "Mesh", rel.c_str());
     selection_.setPrimary(n);
     commands_.execute(std::make_unique<AddNodeCommand>(p, n, "Add Mesh"));
+
+    // Blokk 2.8 — glTF Full Auto-Import: for .gltf/.glb assets, extract
+    // textures + generate .mat.json5 assets + auto-link MaterialOverride for
+    // every material slot. Skip-if-exists on .mat.json5 (don't clobber user
+    // edits on re-import); textures always overwrite (the glTF is the source
+    // of truth for raw bytes).
+    auto isGltfExtension = [](const char* path) {
+        if (!path) return false;
+        size_t n = strlen(path);
+        if (n < 5) return false;
+        auto endsWith = [&](const char* ext) {
+            size_t e = strlen(ext);
+            if (n < e) return false;
+            for (size_t i = 0; i < e; ++i) {
+                if (tolower((unsigned char)path[n - e + i]) != ext[i]) return false;
+            }
+            return true;
+        };
+        return endsWith(".gltf") || endsWith(".glb");
+    };
+
+    if (model_path && *model_path && isGltfExtension(model_path)) {
+        auto er = gltf_asset_extractor::extractGltfAssets(
+            model_path, projectPath_);
+        if (!er.error.empty()) {
+            bus_.emit(kEvtLogError,
+                std::string("[gltf-import] ") + er.error);
+        } else {
+            // Auto-link each generated material to a MaterialOverride on
+            // the spawned MeshRenderer (asset-ref mode, mask=0). The render-
+            // walk picks these up next frame via material_override_io.
+            for (auto& gm : er.materials) {
+                obj* mo = editor_obj_new_material_override(gm.slotName.c_str());
+                editor_material_override_set_asset_path(mo,
+                    gm.assetRelPath.c_str());
+                editor_mesh_renderer_add_override(n, mo);
+            }
+            if (console_) {
+                char buf[200];
+                snprintf(buf, sizeof(buf),
+                    "[gltf-import] extracted %d textures, %zu materials "
+                    "(%d skipped existing)",
+                    er.textures_written, er.materials.size(),
+                    er.materials_skipped_existing);
+                console_->log(buf);
+                for (auto& w : er.warnings) {
+                    console_->log(std::string("[gltf-import] ") + w);
+                }
+            }
+        }
+    }
+
     if (console_) {
         std::string msg = "Created: Mesh";
         if (!rel.empty()) { msg += " ("; msg += rel; msg += ")"; }
@@ -529,6 +586,55 @@ void EditorApp::importDefaultFXShaders() {
     loadProjectFXShaders();
 }
 
+void EditorApp::createMaterialAsset(const std::string& baseName) {
+    if (projectPath_.empty()) {
+        bus_.emit(kEvtLogWarn, std::string("[Material] no project loaded"));
+        return;
+    }
+    namespace fs = std::filesystem;
+    fs::path matsDir = fs::path(projectPath_) / "assets" / "materials";
+    std::error_code ec;
+    fs::create_directories(matsDir, ec);
+    if (ec) {
+        bus_.emit(kEvtLogError,
+            std::string("[Material] failed to create assets/materials/: ") +
+            ec.message());
+        return;
+    }
+
+    // Sanitize the user name → safe filename. Empty → "material".
+    std::string safe;
+    safe.reserve(baseName.size());
+    for (char c : baseName) {
+        if (isalnum((unsigned char)c) || c == '_' || c == '-') safe.push_back(c);
+        else if (c == ' ') safe.push_back('_');
+    }
+    if (safe.empty()) safe = "material";
+
+    // Collision-handling: <name>.mat.json5, <name>_2.mat.json5, ...
+    fs::path target = matsDir / (safe + ".mat.json5");
+    int suffix = 2;
+    while (fs::exists(target, ec)) {
+        target = matsDir / (safe + "_" + std::to_string(suffix++) + ".mat.json5");
+    }
+
+    material_t m;
+    material_asset_io::makeDefault(&m, safe.c_str());
+    bool ok = material_asset_io::writeFile(target.string(), m);
+    // The makeDefault STRDUP'd name; free it (the engine owns material_t now
+    // only conceptually — we never push it into a model_t.materials array).
+    if (m.name) FREE(m.name);
+
+    if (ok) {
+        if (console_) {
+            console_->log(std::string("[Material] created: ") + target.string());
+        }
+    } else {
+        bus_.emit(kEvtLogError,
+            std::string("[Material] failed to write: ") + target.string());
+    }
+}
+
 void EditorApp::loadProjectFXShaders() {
     if (projectPath_.empty()) return;
     namespace fs = std::filesystem;
@@ -714,6 +820,50 @@ void EditorApp::drawCookValidationPopup() {
             cookPrompt_.paths.clear();
             cookPrompt_.zipPath.clear();
             cookPrompt_.issues.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+}
+
+void EditorApp::drawNewMaterialPopup() {
+    // One-shot OpenPopup trigger (same pattern as drawCookValidationPopup).
+    if (newMaterialPromptOpen_) {
+        ImGui::OpenPopup("New Material Asset");
+        newMaterialPromptOpen_ = false;
+        newMaterialNameBuf_[0] = 0;
+    }
+
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    if (ImGui::BeginPopupModal("New Material Asset", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted("Create a new .mat.json5 asset");
+        ImGui::TextDisabled("Target: <project>/assets/materials/");
+        ImGui::Dummy(ImVec2(0, 6));
+
+        ImGui::TextUnformatted("Name:");
+        ImGui::SetNextItemWidth(300.0f);
+        // Auto-focus the input on first frame for keyboard ergonomics.
+        if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+        bool submitOnEnter = ImGui::InputText("##matname",
+            newMaterialNameBuf_, sizeof(newMaterialNameBuf_),
+            ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::TextDisabled("Allowed: A-Z a-z 0-9 _ - (spaces → underscore)");
+
+        ImGui::Dummy(ImVec2(0, 6));
+        const bool canCreate = newMaterialNameBuf_[0] != 0;
+
+        ImGui::BeginDisabled(!canCreate);
+        if (ImGui::Button("Create", ImVec2(96, 0)) ||
+            (submitOnEnter && canCreate)) {
+            createMaterialAsset(newMaterialNameBuf_);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(96, 0))) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -1013,6 +1163,18 @@ void EditorApp::drawMenubar() {
                 "Existing files are NOT overwritten — your edits are safe.");
         }
         ImGui::Separator();
+        // Material asset creation — opens a name-prompt modal. The BeginPopupModal
+        // is in drawNewMaterialPopup(); we just flip the trigger-flag here.
+        if (ImGui::MenuItem("New Material Asset...")) {
+            newMaterialPromptOpen_ = true;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "Creates a new .mat.json5 file under\n"
+                "<project>/assets/materials/. Default PBR settings;\n"
+                "edit afterwards in the Project panel.");
+        }
+        ImGui::Separator();
         if (ImGui::MenuItem("Generate Lua API Stubs (force)")) {
             generateLuaStubs(true);
         }
@@ -1078,6 +1240,8 @@ void EditorApp::drawFrame() {
 
     // Phase 5c — pre-cook validation modal (top-layer).
     drawCookValidationPopup();
+    // Blokk 2.2 — Tools → New Material Asset modal (top-layer).
+    drawNewMaterialPopup();
 }
 
 void EditorApp::run() {

@@ -127,6 +127,13 @@ public:
     // user-edited shader file. Console-log: "[FX] imported N / 28 (skipped M)".
     void importDefaultFXShaders();
 
+    // Material asset — create a new `<project>/assets/materials/<name>.mat.json5`
+    // with default-material contents. If a name collision exists, appends `_2`,
+    // `_3`, etc. so we never overwrite existing assets. Console-log on success
+    // or failure. Triggered from the Tools menu (modal dialog handled by the
+    // menubar — see drawMenubar()).
+    void createMaterialAsset(const std::string& name);
+
     // PostFX — scan `<project>/assets/fx/*.glsl` and feed every NEW shader to
     // `fx_load_from_mem`. State-tracked: each file is loaded at most once
     // per editor session (manual restart picks up newly imported shaders).
@@ -141,6 +148,7 @@ private:
     void drawDockHost();
     void drawMenubar();
     void drawCookValidationPopup();   // Phase 5c
+    void drawNewMaterialPopup();      // Blokk 2.2 — Tools → New Material Asset modal
 
     // Phase 4a — project-relative path conversion. If `inputPath` is absolute
     // and inside the project → "assets/.../foo.iqm" relative. If empty or
@@ -159,6 +167,12 @@ private:
         bool                     openRequested = false;  // true for 1 frame
     };
     PendingCookPrompt cookPrompt_;
+
+    // Blokk 2.2 — New Material Asset modal trigger flag (cleared after the
+    // popup processes its OpenPopup call). Buffer survives across frames
+    // while the modal is open.
+    bool             newMaterialPromptOpen_ = false;
+    char             newMaterialNameBuf_[128] = {};
 
     std::string      projectPath_;
     std::string      lastSavedPath_;     // path after Save Scene (Ctrl+S target)

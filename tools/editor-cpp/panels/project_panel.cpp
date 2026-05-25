@@ -186,7 +186,11 @@ void ProjectPanel::draw(EditorApp& app) {
             ImGui::EndDragDropSource();
         }
         // 1-click → asset selection (Inspector preview).
-        if (ImGui::IsItemHovered() && ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+        // Release-on-hover without crossing the drag threshold, so that
+        // starting a drag-and-drop on the item does NOT re-select it.
+        if (ImGui::IsItemHovered()
+            && ImGui::IsMouseReleased(ImGuiMouseButton_Left)
+            && !ImGui::IsMouseDragPastThreshold(ImGuiMouseButton_Left)) {
             app.selection().setSelectedAsset(full);
         }
         // Double-click → FileTypeRegistry dispatch.

@@ -112,7 +112,12 @@ unsigned texture_update(texture_t *t, unsigned w, unsigned h, unsigned n, const 
 
 GLenum texture_type = t->flags & TEXTURE_ARRAY ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D; // @fixme: test GL_TEXTURE_2D_ARRAY
 
-//glPixelStorei( GL_UNPACK_ALIGNMENT, n < 4 ? 1 : 4 ); // for framebuffer reading
+// Pixel row alignment for CPU→GPU upload. Default GL_UNPACK_ALIGNMENT
+// is 4; an RGB image (n=3) whose width is not a multiple of 4 has a row
+// stride that is not 4-byte aligned, and the driver may over-read past
+// the buffer end — e.g. 4765×3177 RGB: 14295 bytes/row → not aligned →
+// heap corruption + SIGSEGV. Set the alignment to match the stride.
+    glPixelStorei(GL_UNPACK_ALIGNMENT, (n < 4 || ((w * n) & 3)) ? 1 : 4);
 //glActiveTexture(GL_TEXTURE0 + (flags&7));
     glBindTexture(texture_type, t->id);
     glTexImage2D(texture_type, 0, texel_type, w, h, 0, pixel_type, pixel_storage, pixels);

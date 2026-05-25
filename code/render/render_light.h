@@ -47,6 +47,20 @@ API light_t light();
 API void    ui_light(light_t *l);
 API void    ui_lights(unsigned num_lights, light_t *lights);
 
+// Debug-draw of a light's frustum / volume / direction. Per-type:
+//   - LIGHT_DIRECTIONAL: 3×3 grid of parallel arrows along `dir`, plus a
+//     centerline arrow + per-cascade frustum boxes (color-coded) using
+//     `shadow_matrix[]` if shadow processing already ran this frame.
+//   - LIGHT_POINT: influence sphere of radius `shadow_distance`, with a
+//     small RGB axis marker at `pos`.
+//   - LIGHT_SPOT: cone(s) showing inner+outer cone half-angles, apex at
+//     `pos`, base at `pos + dir*shadow_distance`, plus a short direction
+//     arrow. Both rings are drawn when `innerCone != outerCone`.
+// All draws use the standard ddraw color stack — call between ddraw_flush
+// boundaries like any other ddraw primitive.
+API void    ddraw_light(light_t *l);
+API void    ddraw_lights(unsigned num_lights, light_t *lights);
+
 #else
 
 // -----------------------------------------------------------------------------
@@ -225,6 +239,139 @@ void ui_lights(unsigned num_lights, light_t *lights) {
             ui_light(&lights[i]);
             ui_collapse_end();
         }
+    }
+}
+
+// ----------------------------------------------------------------------------
+// debug-draw
+
+// Build a non-degenerate perpendicular basis for an arbitrary unit vector.
+// `dir` must be normalized. Picks world-Y as the seed unless `dir` is nearly
+// parallel to it (then world-X), to avoid the degenerate cross product.
+static
+void ddraw_light_basis_(vec3 dir, vec3 *out_right, vec3 *out_up) {
+    vec3 seed = absf(dir.y) < 0.99f ? vec3(0,1,0) : vec3(1,0,0);
+    *out_right = norm3(cross3(dir, seed));
+    *out_up    = norm3(cross3(*out_right, dir));
+}
+
+// A single cone wireframe (apex + base ring + N spokes), parameterized by
+// the cosine of its half-angle. Used twice for spot lights (inner + outer).
+// Bails on degenerate inputs so a freshly-zeroed light_t doesn't draw garbage.
+static
+void ddraw_light_spot_cone_(vec3 apex, vec3 dir_n, float dist, float cos_half,
+                            unsigned color, int spokes) {
+    if (dist <= 0.0f) return;
+    if (cos_half >=  1.0f - 1e-4f) return; // ~0° → nothing meaningful
+    if (cos_half <= -1.0f + 1e-4f) return; // ~180° → not a cone, skip
+
+    float half_angle = acosf(cos_half);
+    float r = dist * tanf(half_angle);
+    if (r <= 0.0f) return;
+
+    vec3 base = add3(apex, scale3(dir_n, dist));
+    vec3 right, up; ddraw_light_basis_(dir_n, &right, &up);
+
+    ddraw_color_push(color);
+    ddraw_circle(base, dir_n, r);
+    for (int i = 0; i < spokes; i++) {
+        float a = (float)i * 2.0f * C_PI / (float)spokes;
+        vec3 pt = add3(base,
+                       add3(scale3(right, cosf(a) * r),
+                            scale3(up,    sinf(a) * r)));
+        ddraw_line(apex, pt);
+    }
+    ddraw_color_pop();
+}
+
+void ddraw_light(light_t *l) {
+    if (!l) return;
+
+    // Skip drawing direction-derived geometry if dir is zero (would NaN out
+    // of norm3 + acosf). Point lights have no dir requirement.
+    bool has_dir = (l->dir.x != 0.0f || l->dir.y != 0.0f || l->dir.z != 0.0f);
+
+    if (l->type == LIGHT_DIRECTIONAL) {
+        if (!has_dir) return;
+        vec3 dir = norm3(l->dir);
+        vec3 anchor = l->pos; // typically (0,0,0)
+        float len = 5.0f;
+        vec3 right, up; ddraw_light_basis_(dir, &right, &up);
+
+        // 3×3 grid of parallel arrows showing the directional spread.
+        // Skipping (0,0) so the centerline arrow (white) stands out.
+        ddraw_color_push(YELLOW);
+        for (int i = -1; i <= 1; i++) {
+            for (int j = -1; j <= 1; j++) {
+                if (i == 0 && j == 0) continue;
+                vec3 off = add3(scale3(right, (float)i * 1.5f),
+                                scale3(up,    (float)j * 1.5f));
+                ddraw_arrow(add3(anchor, off),
+                            add3(anchor, add3(off, scale3(dir, len))));
+            }
+        }
+        ddraw_color(WHITE);
+        ddraw_arrow(anchor, add3(anchor, scale3(dir, len * 1.4f)));
+
+        // CSM cascade frustums (live from the last shadowmap pass).
+        // `shadow_matrix[i]` is the projview for cascade i; ddraw_frustum
+        // builds the world-space box via inverse-clip. Color-coded by index.
+        if (l->cast_shadows && l->processed_shadows
+                && l->shadow_technique == SHADOW_CSM) {
+            unsigned colors[4] = {RED, GREEN, BLUE, ORANGE};
+            for (int i = 0; i < NUM_SHADOW_CASCADES; i++) {
+                ddraw_color(colors[i & 3]);
+                ddraw_frustum(l->shadow_matrix[i]);
+            }
+        }
+        ddraw_color_pop();
+    }
+    else if (l->type == LIGHT_POINT) {
+        float r = l->shadow_distance > 0.0f ? l->shadow_distance : 5.0f;
+
+        ddraw_color_push(YELLOW);
+        ddraw_sphere(l->pos, r);
+
+        // RGB axis cross at the position (5% of sphere radius).
+        float m = r * 0.05f;
+        if (m < 0.05f) m = 0.05f;
+        ddraw_color(RED);
+        ddraw_line(sub3(l->pos, vec3(m,0,0)), add3(l->pos, vec3(m,0,0)));
+        ddraw_color(GREEN);
+        ddraw_line(sub3(l->pos, vec3(0,m,0)), add3(l->pos, vec3(0,m,0)));
+        ddraw_color(BLUE);
+        ddraw_line(sub3(l->pos, vec3(0,0,m)), add3(l->pos, vec3(0,0,m)));
+        ddraw_color_pop();
+    }
+    else if (l->type == LIGHT_SPOT) {
+        if (!has_dir) return;
+        vec3 dir = norm3(l->dir);
+        float dist = l->shadow_distance > 0.0f ? l->shadow_distance : 10.0f;
+
+        // Engine semantics: innerCone / outerCone store COSINES of the
+        // half-angles, and the shader fades attenuation linearly between
+        // them (angle > innerCone → start fading in, > outerCone → fully on).
+        // For viz we render BOTH cones — the wider one (= smaller cosine) in
+        // YELLOW, the narrower one in ORANGE. We sort the cosines so we
+        // tolerate either field-ordering convention.
+        float cos_wider    = minf(l->innerCone, l->outerCone);
+        float cos_narrower = maxf(l->innerCone, l->outerCone);
+
+        ddraw_light_spot_cone_(l->pos, dir, dist, cos_wider,    YELLOW, 12);
+        if (absf(cos_narrower - cos_wider) > 1e-3f) {
+            ddraw_light_spot_cone_(l->pos, dir, dist, cos_narrower, ORANGE, 12);
+        }
+
+        // Short forward arrow at the apex so the spot's facing is obvious.
+        ddraw_color_push(WHITE);
+        ddraw_arrow(l->pos, add3(l->pos, scale3(dir, dist * 0.2f)));
+        ddraw_color_pop();
+    }
+}
+
+void ddraw_lights(unsigned num_lights, light_t *lights) {
+    for (unsigned i = 0; i < num_lights; ++i) {
+        ddraw_light(&lights[i]);
     }
 }
 

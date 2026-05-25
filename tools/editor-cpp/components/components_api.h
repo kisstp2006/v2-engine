@@ -34,6 +34,31 @@ API const char*  editor_mesh_renderer_path      (const struct obj* o);
 API void         editor_mesh_renderer_compose_pivot(const struct obj* o,
                                                     float out_pivot[16]);
 
+// MaterialOverride array on the MeshRenderer (Blokk 2.4). These are NOT
+// scene-children — they live in a runtime `array(obj*) material_overrides`
+// and are persisted via the editor extra-serializer (Blokk 2.5).
+API int          editor_mesh_renderer_overrides_count(const struct obj* o);
+API struct obj*  editor_mesh_renderer_override_at    (const struct obj* o, int i);
+API void         editor_mesh_renderer_add_override   (struct obj* o, struct obj* mo);
+API void         editor_mesh_renderer_remove_override(struct obj* o, int i);
+API void         editor_mesh_renderer_clear_overrides(struct obj* o);
+API struct obj*  editor_mesh_renderer_find_override_by_name(const struct obj* o,
+                                                            const char* name);
+
+// MaterialOverride component (Blokk 2.4). Hybrid asset-ref + inline overlay.
+// `name` matches model_t.materials[i].name; `material_asset_path` (optional)
+// is a project-relative path to a `.mat.json5`; `override_mask` selects which
+// `inline_mat` fields overlay onto the asset.
+API struct obj*    editor_obj_new_material_override(const char* name);
+API int            editor_obj_is_material_override (const struct obj* o);
+API const char*    editor_material_override_name        (const struct obj* o);
+API const char*    editor_material_override_asset_path  (const struct obj* o);
+API void           editor_material_override_set_name      (struct obj* o, const char* name);
+API void           editor_material_override_set_asset_path(struct obj* o, const char* path);
+// Mutable handles for direct in-place editing (used by the Inspector UI).
+API material_t*    editor_material_override_inline_mat (struct obj* o);
+API unsigned*      editor_material_override_mask_addr  (struct obj* o);
+
 // New SpriteRenderer node (pos/rot/scale + texture_path + tint).
 API struct obj* editor_obj_new_sprite_renderer(struct obj* parent, const char* name,
                                                const char* texture_path);

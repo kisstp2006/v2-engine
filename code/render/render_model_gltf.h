@@ -330,25 +330,29 @@ bool model_load_meshes_gltf(cgltf_data *data, iqm_t *q, model_t *m, int flags) {
             }
         }
 
-        // Y-flip policy:
-        //   - STATIC mesh: bake the Y-flip into the vertex bind here so the
+        // X+Y flip policy (= 180° rotation around the Z axis):
+        //   - STATIC mesh: bake the flip into the vertex bind here so the
         //     MeshRenderer pivot can stay identity (IQM convention).
-        //   - SKINNED mesh: SKIP the Y-flip — the vertex stays in glTF-native
-        //     Y-up space, the same basis baseframe[]/vsBoneMatrix live in.
-        //     The editor render-walk compensates by applying a Y-flip to the
-        //     model's pivot (gated on MODEL_GLTF_SKINNED, set below).
+        //   - SKINNED mesh: SKIP the flip — the vertex stays in glTF-native
+        //     space, the same basis baseframe[]/vsBoneMatrix live in. The
+        //     editor render-walk compensates by applying the same flip to
+        //     the model's pivot (gated on MODEL_GLTF_SKINNED).
         //     This keeps skinning math algebraically consistent under any
         //     animation delta, not just the small-delta common case.
         if (!node->skin) {
+            world[0]  = -world[0];
+            world[4]  = -world[4];
+            world[8]  = -world[8];
+            world[12] = -world[12];
             world[1]  = -world[1];
             world[5]  = -world[5];
             world[9]  = -world[9];
             world[13] = -world[13];
         }
 
-        // Winding-flip: the Y-flip above contributes a negative determinant,
-        // so this flag toggles for normal-orientation nodes (and toggles back
-        // off for nodes with an additional mirror in their TRS).
+        // Winding-flip: negating two rows preserves the determinant sign,
+        // so a 180°-Z rotation needs NO winding swap. This flag still
+        // toggles for genuinely mirrored TRS in the node (negative scale).
         bool flip_winding = (gltf_mat3_det(world) < 0.0f);
 
         for (size_t pi = 0; pi < node->mesh->primitives_count; pi++) {

@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <string>
 #include <system_error>
+#include <unordered_map>
 
 #include "../core/ide_launcher.h"
 
@@ -20,6 +21,8 @@
 #include "../core/asset_path.h"
 #include "../core/event_bus.h"
 #include "../core/events.h"
+#include "../persistence/material_asset_io.h"
+#include "material_drawer.h"
 
 #ifdef _WIN32
     #ifndef WIN32_LEAN_AND_MEAN
@@ -73,6 +76,53 @@ void revealInExplorer(const std::string& absPath) {
 #else
     (void)absPath;
 #endif
+}
+
+// `.mat.json5` extension check — case-insensitive. We use this to switch the
+// preview into material-editor mode below.
+bool isMaterialAsset(const std::string& path) {
+    static const std::string ext = ".mat.json5";
+    if (path.size() < ext.size()) return false;
+    for (size_t i = 0; i < ext.size(); ++i) {
+        char a = (char)tolower((unsigned char)path[path.size() - ext.size() + i]);
+        if (a != ext[i]) return false;
+    }
+    return true;
+}
+
+// ---- Material-preview cache --------------------------------------------------
+// Loading a material is non-trivial (parse JSON5 + texture-load every channel
+// that has a texname). Cache the parsed `material_t` per absolute path; reload
+// on mtime change. Saved values write back to disk + bump the cached mtime so
+// the next frame doesn't reload pointlessly.
+struct MaterialCacheEntry {
+    material_t mat{};
+    fs::file_time_type mtime{};
+    bool loaded = false;
+};
+
+MaterialCacheEntry* getOrLoadMaterialCache(const std::string& absPath,
+                                           const std::string& projectRoot) {
+    static std::unordered_map<std::string, MaterialCacheEntry> cache;
+
+    std::error_code ec;
+    fs::file_time_type now = fs::last_write_time(absPath, ec);
+
+    auto it = cache.find(absPath);
+    if (it != cache.end()) {
+        if (it->second.loaded && it->second.mtime == now) return &it->second;
+        // Stale → re-load. The material_t fields are POD; texture pointers
+        // leak by design — they're cached engine-side in the texture cache,
+        // re-load is idempotent.
+        it->second = MaterialCacheEntry{};
+    }
+
+    MaterialCacheEntry entry;
+    if (material_asset_io::loadMaterial(absPath, projectRoot, &entry.mat)) {
+        entry.mtime  = now;
+        entry.loaded = true;
+    }
+    return &(cache[absPath] = std::move(entry));
 }
 
 }  // namespace
@@ -144,6 +194,49 @@ void drawAssetPreview(EditorApp& app, const std::string& absPath) {
     ImGui::SameLine();
     if (ImGui::Button("Reveal in folder")) {
         revealInExplorer(absPath);
+    }
+
+    // ---- Material asset editor (Blokk 2.3) ---------------------------------
+    // For `.mat.json5` assets, drop the engine's built-in ui_material() right
+    // here in the Inspector. The user edits + clicks Save → writes back to disk
+    // (mtime-bump suppresses the next-frame reload).
+    if (isMaterialAsset(absPath)) {
+        ImGui::Separator();
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.0f, 1.0f), "Material");
+        ImGui::Spacing();
+
+        MaterialCacheEntry* entry = getOrLoadMaterialCache(
+            absPath, app.projectPath());
+
+        if (!entry || !entry->loaded) {
+            ImGui::TextColored(ImVec4(1.0f, 0.40f, 0.40f, 1.0f),
+                               "Failed to parse material JSON5.");
+            ImGui::TextDisabled("Check the file with a text editor.");
+        } else {
+            if (ImGui::Button("Save Changes")) {
+                if (material_asset_io::writeFile(absPath, entry->mat)) {
+                    // Bump cached mtime so next frame's mtime-poll doesn't
+                    // reload (which would discard mid-edit state).
+                    std::error_code ec;
+                    entry->mtime = fs::last_write_time(absPath, ec);
+                    app.bus().emit(kEvtLogInfo,
+                        std::string("[Material] saved: ") + rel);
+                } else {
+                    app.bus().emit(kEvtLogError,
+                        std::string("[Material] write failed: ") + absPath);
+                }
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("(Ctrl+S also saves the scene, not this file.)");
+            ImGui::Separator();
+
+            // Editor's own material UI — per-channel collapsible with
+            // texture-input + color-picker + thumbnail integrated in ONE place.
+            // (Replaces the engine's ui_material() which had no way to set
+            // texname; see material_drawer.h for context.)
+            drawMaterial(&entry->mat, app.projectPath());
+        }
     }
 }
 

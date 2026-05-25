@@ -205,7 +205,22 @@ bool ScriptHost::bindEngineFFI(lua_State* L) {
         "const char*    editor_text_renderer_3d_text    (const obj* o);\n"
         "unsigned*      editor_text_renderer_3d_color_addr(obj* o);\n"
         "int*         editor_postfx_stack_enabled_addr(obj* o);\n"
-        "const char*  editor_postfx_stack_fx_dir     (const obj* o);\n";
+        "const char*  editor_postfx_stack_fx_dir     (const obj* o);\n"
+        /* ---- MaterialOverride + MeshRenderer overrides array (Blokk 2.4) ---- */
+        "int          editor_obj_is_material_override     (const obj* o);\n"
+        "obj*         editor_obj_new_material_override    (const char* name);\n"
+        "const char*  editor_material_override_name       (const obj* o);\n"
+        "const char*  editor_material_override_asset_path (const obj* o);\n"
+        "void         editor_material_override_set_name      (obj* o, const char* name);\n"
+        "void         editor_material_override_set_asset_path(obj* o, const char* path);\n"
+        "material_t*  editor_material_override_inline_mat (obj* o);\n"
+        "unsigned*    editor_material_override_mask_addr  (obj* o);\n"
+        "int          editor_mesh_renderer_overrides_count(const obj* o);\n"
+        "obj*         editor_mesh_renderer_override_at    (const obj* o, int i);\n"
+        "void         editor_mesh_renderer_add_override   (obj* o, obj* mo);\n"
+        "void         editor_mesh_renderer_remove_override(obj* o, int i);\n"
+        "void         editor_mesh_renderer_clear_overrides(obj* o);\n"
+        "obj*         editor_mesh_renderer_find_override_by_name(const obj* o, const char* name);\n";
 
     // "API " token strip (modeled after luaj_bind).
     std::string clean(WIN_PRELUDE);

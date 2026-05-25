@@ -145,6 +145,7 @@ node.skybox_refl_path = _path(_C.editor_skybox_refl_path)
 node.skybox_env_path  = _path(_C.editor_skybox_env_path)
 node.text_str         = _path(_C.editor_text_renderer_text)
 node.text3d_str       = _path(_C.editor_text_renderer_3d_text)
+node.postfx_fx_dir    = _path(_C.editor_postfx_stack_fx_dir)
 
 -- ---- Camera-specific (dir vec3*) -------------------------------------
 function node.camera_dir(o)
@@ -228,6 +229,10 @@ function scene.find_text3d(root)
     return scene.find_first(root, node.is_text3d)
 end
 
+function scene.find_postfx(root)
+    return scene.find_first(root, node.is_postfx)
+end
+
 -- `scene.find_all(root, predicate)` collects every matching node into a table.
 -- Useful when there can be many of the same type (e.g. all Text3D labels).
 function scene.find_all(root, predicate)
@@ -283,6 +288,74 @@ function node.text3d_color(o)
     local p = _C.editor_text_renderer_3d_color_addr(o)
     if p == nil then return nil end
     return p
+end
+
+-- ---- PostFXStack ------------------------------------------------------
+-- Master enable flag (int*, 0/1). Toggling this to 0 short-circuits the
+-- whole fx_begin/end pipeline in the render-walk — useful for quick A/B.
+function node.postfx_enabled(o)
+    if not o then return nil end
+    local p = _C.editor_postfx_stack_enabled_addr(o)
+    if p == nil then return nil end
+    return p
+end
+
+-- Name-based pass enable / disable / setparam wrappers around the engine's
+-- fx_find + fx_enable / fx_setparam[i] API. The script doesn't need to know
+-- the numeric pass index — names like "fxBloom.glsl" are stable across
+-- reorders, so this is the friendlier API for gameplay scripts.
+--
+-- Example:
+--   function on_update(self, dt)
+--       local t = os.clock()
+--       node.fx_setparam("fxVignette.glsl", "radius", 0.6 + 0.2*math.sin(t))
+--   end
+function node.fx_enable(name, on)
+    if not name then return end
+    local slot = _C.fx_find(name)
+    if slot < 0 then return end
+    _C.fx_enable(slot, on and 1 or 0)
+end
+
+function node.fx_setparam(name, uniform, value)
+    if not name or not uniform then return end
+    local slot = _C.fx_find(name)
+    if slot < 0 then return end
+    -- Lua-number → C.float (auto-cast through LuaJIT FFI). For vec3/vec4
+    -- uniforms use the underlying _C.fx_setparam3/4 directly with `ffi.new`.
+    _C.fx_setparam(slot, uniform, value)
+end
+
+function node.fx_setparami(name, uniform, value)
+    if not name or not uniform then return end
+    local slot = _C.fx_find(name)
+    if slot < 0 then return end
+    _C.fx_setparami(slot, uniform, value)
+end
+
+-- Iterate the loaded FX-pass count (the engine's `fx_name(i)` returns ""
+-- past the array end, so we just walk until empty). Cheap — at most a few
+-- dozen entries per scene.
+function node.fx_pass_count()
+    local n = 0
+    while true do
+        local nm = _C.fx_name(n)
+        if nm == nil then break end
+        local s = _string(nm)
+        if s == "" then break end
+        n = n + 1
+    end
+    return n
+end
+
+-- Read-only check: is pass `name` currently enabled? (Wraps fx_find +
+-- fx_enabled — same shape as a `node.fx_is_on(name)` query.) Returns false
+-- if the pass isn't loaded.
+function node.fx_is_on(name)
+    if not name then return false end
+    local slot = _C.fx_find(name)
+    if slot < 0 then return false end
+    return _C.fx_enabled(slot) ~= 0
 end
 )LUA";
 

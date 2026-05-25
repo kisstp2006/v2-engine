@@ -445,6 +445,7 @@ GenResult generate(const std::string& projectPath,
           << "---@field is_skybox        fun(o: obj|nil): boolean\n"
           << "---@field is_text          fun(o: obj|nil): boolean\n"
           << "---@field is_text3d        fun(o: obj|nil): boolean\n"
+          << "---@field is_postfx        fun(o: obj|nil): boolean\n"
           << "---@field mesh_path        fun(o: obj|nil): string|nil\n"
           << "---@field sprite_path      fun(o: obj|nil): string|nil\n"
           << "---@field tilemap_path     fun(o: obj|nil): string|nil\n"
@@ -468,6 +469,13 @@ GenResult generate(const std::string& projectPath,
           << "---@field text3d_str       fun(o: obj|nil): string|nil\n"
           << "---@field text3d_color     fun(o: obj|nil): any|nil  -- uint*  (write via [0])\n"
           << "                                                    -- (use node.scale(o) for size; scale.x is uniform)\n"
+          << "---@field postfx_fx_dir    fun(o: obj|nil): string|nil\n"
+          << "---@field postfx_enabled   fun(o: obj|nil): any|nil  -- int*  (master on/off, write via [0])\n"
+          << "---@field fx_enable        fun(name: string, on: integer|boolean)\n"
+          << "---@field fx_setparam      fun(name: string, uniform: string, value: number)\n"
+          << "---@field fx_setparami     fun(name: string, uniform: string, value: integer)\n"
+          << "---@field fx_pass_count    fun(): integer\n"
+          << "---@field fx_is_on         fun(name: string): boolean\n"
           << "---@type engine_node\nnode = {}\n\n";
 
         // ---- scene helper module (depth-first lookup + convenience) -----
@@ -479,6 +487,7 @@ GenResult generate(const std::string& projectPath,
           << "---@field find_skybox fun(root: obj|nil): obj|nil\n"
           << "---@field find_text   fun(root: obj|nil): obj|nil\n"
           << "---@field find_text3d fun(root: obj|nil): obj|nil\n"
+          << "---@field find_postfx fun(root: obj|nil): obj|nil\n"
           << "---@type engine_scene\nscene = {}\n";
     }
 

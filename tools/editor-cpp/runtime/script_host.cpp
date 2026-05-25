@@ -139,6 +139,13 @@ bool ScriptHost::bindEngineFFI(lua_State* L) {
     // `vec3` is a union in engine.ffi (engine); `obj` is an opaque typedef.
     // That's why we use typedef-style references (NOT `struct vec3*`),
     // otherwise LuaJIT gives an "attempt to redefine 'vec3'" error.
+    // NOTE — duplication risk: this list MIRRORS components_api.h. Every new
+    // `editor_*` helper used from Lua must be cdef-ed here (LuaJIT FFI requires
+    // a typedef for any `C.fn` access — without it, `_C.fn` raises an error
+    // at the LOOKUP, not at the call). Missing entries silently break the
+    // node-api init chunk (`script_node_api.h::kNodeApiLua`), and everything
+    // declared AFTER the bad line — including `scene = scene or {}` — never
+    // runs. Auto-generation from components_api.h is a future refactor.
     static const char* EDITOR_PRELUDE =
         "/* editor helpers (tools/editor-cpp/) */\n"
         "vec3* editor_obj_pos_addr           (obj* o);\n"
@@ -156,6 +163,7 @@ bool ScriptHost::bindEngineFFI(lua_State* L) {
         "vec3* editor_camera_ref_pos_addr    (obj* o);\n"
         "vec3* editor_camera_ref_dir_addr    (obj* o);\n"
         "vec3* editor_audio_source_pos_addr  (obj* o);\n"
+        "vec3* editor_text_renderer_3d_pos_addr(obj* o);\n"
         "const char*  editor_mesh_renderer_path     (const obj* o);\n"
         "const char*  editor_sprite_renderer_path   (const obj* o);\n"
         "const char*  editor_tilemap_ref_path       (const obj* o);\n"
@@ -173,7 +181,31 @@ bool ScriptHost::bindEngineFFI(lua_State* L) {
         "int          editor_obj_is_audio_source    (const obj* o);\n"
         "int          editor_obj_is_script          (const obj* o);\n"
         "int          editor_script_enabled         (const obj* o);\n"
-        "void         editor_script_set_enabled     (obj* o, int v);\n";
+        "void         editor_script_set_enabled     (obj* o, int v);\n"
+        /* ---- Fog / Skybox / Text / Text3D / PostFX (script_node_api.h) ---- */
+        "int          editor_obj_is_fog_settings    (const obj* o);\n"
+        "int          editor_obj_is_skybox          (const obj* o);\n"
+        "int          editor_obj_is_text_renderer   (const obj* o);\n"
+        "int          editor_obj_is_text_renderer_3d(const obj* o);\n"
+        "int          editor_obj_is_postfx_stack    (const obj* o);\n"
+        "int*         editor_fog_settings_mode_addr   (obj* o);\n"
+        "vec3*        editor_fog_settings_color_addr  (obj* o);\n"
+        "float*       editor_fog_settings_start_addr  (obj* o);\n"
+        "float*       editor_fog_settings_end_addr    (obj* o);\n"
+        "float*       editor_fog_settings_density_addr(obj* o);\n"
+        "const char*  editor_skybox_sky_path        (const obj* o);\n"
+        "const char*  editor_skybox_refl_path       (const obj* o);\n"
+        "const char*  editor_skybox_env_path        (const obj* o);\n"
+        "int*         editor_skybox_render_bg_addr  (obj* o);\n"
+        "const char*  editor_text_renderer_text     (const obj* o);\n"
+        "int*         editor_text_renderer_face_addr     (obj* o);\n"
+        "int*         editor_text_renderer_color_addr    (obj* o);\n"
+        "int*         editor_text_renderer_size_addr     (obj* o);\n"
+        "float*       editor_text_renderer_max_width_addr(obj* o);\n"
+        "const char*    editor_text_renderer_3d_text    (const obj* o);\n"
+        "unsigned*      editor_text_renderer_3d_color_addr(obj* o);\n"
+        "int*         editor_postfx_stack_enabled_addr(obj* o);\n"
+        "const char*  editor_postfx_stack_fx_dir     (const obj* o);\n";
 
     // "API " token strip (modeled after luaj_bind).
     std::string clean(WIN_PRELUDE);

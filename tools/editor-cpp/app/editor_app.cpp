@@ -22,6 +22,7 @@
 #include "../panels/console_panel.h"
 #include "../components/components_api.h"
 #include "../persistence/scene_io.h"
+#include "../persistence/postfx_state_io.h"
 #include "../runtime/script_host.h"
 #include "../runtime/cook_runner.h"
 #include "../runtime/asset_validator.h"
@@ -123,6 +124,86 @@ obj* EditorApp::createSprite(const char* texture_path, obj* parent) {
     return n;
 }
 
+namespace {
+
+// DFS for the first PostFXStack node in the scene (NULL if none).
+obj* findPostFXStackNode_save(obj* node) {
+    if (!node) return nullptr;
+    if (editor_obj_is_postfx_stack(node)) return node;
+    int n = editor_obj_child_count(node);
+    for (int i = 0; i < n; ++i) {
+        obj* r = findPostFXStackNode_save(editor_obj_child_at(node, i));
+        if (r) return r;
+    }
+    return nullptr;
+}
+
+// PostFX state lives in a sidecar JSON5 file next to the scene. Reason:
+// the v2-engine reflection-IO's char* field has a hard 128-byte truncation
+// + first-newline cutoff (obj_obj.h:864-871) that can't hold a multi-pass
+// blob. Sidecar bypasses the limit and keeps the scene file readable.
+//
+// Naming convention: `<scene>.json5` → `<scene>.postfx.json5`. The `.json5`
+// suffix is stripped first so the sidecar is also a valid JSON5 (mirrors the
+// `.prefab.json5` family).
+std::string postfxSidecarPath(const std::string& scenePath) {
+    static const std::string kJson5 = ".json5";
+    if (scenePath.size() > kJson5.size() &&
+        scenePath.compare(scenePath.size() - kJson5.size(),
+                          kJson5.size(), kJson5) == 0) {
+        return scenePath.substr(0, scenePath.size() - kJson5.size()) +
+               ".postfx.json5";
+    }
+    return scenePath + ".postfx.json5";
+}
+
+// Pre-save hook: snapshot the live engine state into the sidecar file.
+// No-op if the scene has no PostFXStack node (we don't litter sidecars
+// next to PostFX-free scenes).
+void writePostFXSidecar(const std::string& scenePath, obj* root,
+                        ConsolePanel* console) {
+    if (!findPostFXStackNode_save(root)) return;
+    std::string sidecar = postfxSidecarPath(scenePath);
+    std::string blob    = postfx_state_io::snapshotEngineState();
+    int ok = file_write(sidecar.c_str(), blob.c_str(), (int)blob.size());
+    if (console) {
+        console->log(std::string(ok ? "[PostFX] sidecar saved: "
+                                    : "[PostFX] sidecar save failed: ")
+                     + sidecar);
+    }
+}
+
+// Post-load hook: read the sidecar (if present) and apply onto the engine.
+// No-op if the scene has no PostFXStack node — the engine fx_* state still
+// exists, but is rendering-irrelevant without a PostFXStack triggering
+// fx_begin/end in the render-walk.
+void readPostFXSidecar(const std::string& scenePath, obj* root,
+                       ConsolePanel* console) {
+    if (!findPostFXStackNode_save(root)) return;
+    std::string sidecar = postfxSidecarPath(scenePath);
+    if (!is_file(sidecar.c_str())) return;
+
+    int sz = 0;
+    char* content = file_read(sidecar.c_str(), &sz);
+    if (!content || sz <= 0) return;
+
+    auto ar = postfx_state_io::applyEngineState(std::string(content, sz));
+    if (console) {
+        char buf[160];
+        snprintf(buf, sizeof(buf),
+            "[PostFX] applied: %d/%d passes, %d uniforms (%d skipped)",
+            ar.passes_applied,
+            ar.passes_applied + ar.passes_missing,
+            ar.uniforms_applied, ar.uniforms_skipped);
+        console->log(buf);
+        for (const auto& w : ar.warnings) {
+            console->log(std::string("[PostFX] ") + w);
+        }
+    }
+}
+
+}  // namespace
+
 void EditorApp::saveScene() {
     if (lastSavedPath_.empty()) { saveSceneAs(); return; }
     std::string json = SceneIO::saveTree(scene_.root());
@@ -130,6 +211,8 @@ void EditorApp::saveScene() {
     if (ok) {
         isDirty_ = false;
         bus_.emit(kEvtSceneDirty, false);
+        // Sidecar AFTER the scene file succeeds — keeps the pair in sync.
+        writePostFXSidecar(lastSavedPath_, scene_.root(), console_);
     }
     if (console_) {
         console_->log(std::string(ok ? "[Scene] saved: " : "[Scene] save failed: ")
@@ -147,6 +230,7 @@ void EditorApp::saveSceneAs() {
         lastSavedPath_ = path;
         isDirty_ = false;
         bus_.emit(kEvtSceneDirty, false);
+        writePostFXSidecar(path, scene_.root(), console_);
     }
     if (console_) {
         console_->log(std::string(ok ? "[Scene] saved: " : "[Scene] save failed: ")
@@ -213,6 +297,10 @@ void EditorApp::openScene(const std::string& path) {
     // the ctor (e.g. via Tools → Import, or copied in by hand). dedup-set
     // means already-loaded ones are skipped.
     loadProjectFXShaders();
+    // Re-apply the snapshotted PostFX state (per-pass enabled / priority /
+    // uniform-values) from the `.postfx.json5` sidecar. Order matters: must
+    // run AFTER loadProjectFXShaders so fx_find() can resolve the names.
+    readPostFXSidecar(path, scene_.root(), console_);
 }
 
 obj* EditorApp::createTilemap(const char* tmx_path, obj* parent) {

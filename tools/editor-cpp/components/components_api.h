@@ -146,6 +146,8 @@ API int*   editor_postfx_stack_enabled_addr(struct obj* o);
 API char** editor_postfx_stack_fx_dir_addr (struct obj* o);
 // Read-only string getter (Lua node.postfx_fx_dir helper, later).
 API const char* editor_postfx_stack_fx_dir(const struct obj* o);
+// Note: per-pass enabled / uniform snapshot is NOT stored on this component —
+// it lives in a `<scene>.postfx.json5` sidecar (see postfx_state_io).
 
 // New TextRenderer node — screen-space text overlay (HUD).
 // `pos.x/.y` = viewport pixel position; markup tags in `text` allowed.

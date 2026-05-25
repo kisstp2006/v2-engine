@@ -66,3 +66,10 @@ const char* editor_postfx_stack_fx_dir(const obj* o) {
     if (!editor_obj_is_postfx_stack(o)) return NULL;
     return ((const PostFXStack*)o)->fx_dir;
 }
+
+// Note: PostFX state perzisztencia (per-pass enabled / uniform-values) NOT
+// stored in this component — the v2-engine obj_saveini `char*` field has a
+// hard 128-byte buffer + first-newline truncation (obj_obj.h:864-871) that
+// can't hold a multi-pass JSON blob. The state lives in a sidecar file
+// `<scene>.postfx.json5` instead, written/read by editor_app.cpp around
+// SceneIO::saveTree / loadTreeDetailed.

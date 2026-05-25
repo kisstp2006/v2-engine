@@ -125,6 +125,7 @@ node.is_fog     = _check(_C.editor_obj_is_fog_settings)
 node.is_skybox  = _check(_C.editor_obj_is_skybox)
 node.is_text    = _check(_C.editor_obj_is_text_renderer)
 node.is_text3d  = _check(_C.editor_obj_is_text_renderer_3d)
+node.is_postfx  = _check(_C.editor_obj_is_postfx_stack)
 
 -- ---- Asset-path shortcuts (Lua-string, or nil) -----------------------
 local function _path(fn) return function(o)

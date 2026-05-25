@@ -9,6 +9,7 @@
 #endif
 
 #include "scene_io.h"
+#include "extra_serializer.h"
 #include "../core/asset_path.h"
 #include "../inspector/hint_parser.h"
 #include "../scene/scene_helpers.h"
@@ -99,10 +100,27 @@ void collectNodes(obj* node, int parentIdx,
     // the other hand puts the typename BEFORE the `{`, and the `obj_make`
     // parser can't find it.
     char* body = obj_saveini(node);
+    std::string bodyStr(body ? body : "");
+
+    // Editor-side extras: if a serializer is registered for this objType,
+    // append the marker + blob. The v2 obj_mergeini IGNORES post-marker lines
+    // (they're not `<type>.<name>=` formatted), so this is transparent to the
+    // engine reflection rebuild.
+    const char* type = obj_type(node);
+    IComponentExtraSerializer* ser =
+        ExtraSerializerRegistry::instance().lookup(type);
+    if (ser) {
+        std::string blob = ser->serialize(node);
+        if (!blob.empty()) {
+            if (!bodyStr.empty() && bodyStr.back() != '\n') bodyStr += '\n';
+            bodyStr += ExtraSerializerRegistry::kMarker;
+            bodyStr += '\n';
+            bodyStr += blob;
+        }
+    }
+
     int myIdx = (int)out.size();
-    out.emplace_back(parentIdx,
-                     std::string(nm ? nm : ""),
-                     std::string(body ? body : ""));
+    out.emplace_back(parentIdx, std::string(nm ? nm : ""), std::move(bodyStr));
 
     int n = editor_obj_child_count(node);
     for (int i = 0; i < n; ++i) {
@@ -193,6 +211,27 @@ LoadResult SceneIO::loadTreeDetailed(const std::string& json,
         }
 
         std::string realBody = unescapeJson5(body);
+
+        // Split off the editor-extras blob (if any) before handing the body to
+        // obj_make. The v2 obj_mergeini would also ignore post-marker content
+        // (no `<type>.<name>=` lines), but stripping it explicitly keeps the
+        // ini-portion clean and lets us pass the blob to the right serializer.
+        std::string extrasBlob;
+        {
+            const std::string marker = ExtraSerializerRegistry::kMarker;
+            size_t mpos = realBody.find(marker);
+            if (mpos != std::string::npos) {
+                size_t after = mpos + marker.size();
+                if (after < realBody.size() && realBody[after] == '\n') ++after;
+                extrasBlob = realBody.substr(after);
+                // Trim the marker + blob off the body before obj_make.
+                realBody.resize(mpos);
+                while (!realBody.empty() && realBody.back() == '\n') {
+                    realBody.pop_back();
+                }
+            }
+        }
+
         obj* o = !realBody.empty() ? (obj*)obj_make(realBody.c_str()) : nullptr;
         if (!o) {
             std::string tHint;
@@ -218,6 +257,14 @@ LoadResult SceneIO::loadTreeDetailed(const std::string& json,
             // Phase 4b — auto-migration: we convert every [asset:*] char*
             // field to relative, if abs+in-project.
             result.migrated_paths += migrateNodePaths(o, projectRoot);
+            // Editor-extras: if a serializer is registered for this objType,
+            // hand it the blob (no-op if no blob or no serializer).
+            if (!extrasBlob.empty()) {
+                const char* type = obj_type(o);
+                if (auto* ser = ExtraSerializerRegistry::instance().lookup(type)) {
+                    ser->deserialize(o, extrasBlob);
+                }
+            }
             ++result.created;
         }
         created.push_back(o);

@@ -23,6 +23,7 @@
 #include "../components/components_api.h"
 #include "../persistence/scene_io.h"
 #include "../persistence/postfx_state_io.h"
+#include "../persistence/material_asset_io.h"
 #include "../runtime/script_host.h"
 #include "../runtime/cook_runner.h"
 #include "../runtime/asset_validator.h"
@@ -529,6 +530,55 @@ void EditorApp::importDefaultFXShaders() {
     loadProjectFXShaders();
 }
 
+void EditorApp::createMaterialAsset(const std::string& baseName) {
+    if (projectPath_.empty()) {
+        bus_.emit(kEvtLogWarn, std::string("[Material] no project loaded"));
+        return;
+    }
+    namespace fs = std::filesystem;
+    fs::path matsDir = fs::path(projectPath_) / "assets" / "materials";
+    std::error_code ec;
+    fs::create_directories(matsDir, ec);
+    if (ec) {
+        bus_.emit(kEvtLogError,
+            std::string("[Material] failed to create assets/materials/: ") +
+            ec.message());
+        return;
+    }
+
+    // Sanitize the user name → safe filename. Empty → "material".
+    std::string safe;
+    safe.reserve(baseName.size());
+    for (char c : baseName) {
+        if (isalnum((unsigned char)c) || c == '_' || c == '-') safe.push_back(c);
+        else if (c == ' ') safe.push_back('_');
+    }
+    if (safe.empty()) safe = "material";
+
+    // Collision-handling: <name>.mat.json5, <name>_2.mat.json5, ...
+    fs::path target = matsDir / (safe + ".mat.json5");
+    int suffix = 2;
+    while (fs::exists(target, ec)) {
+        target = matsDir / (safe + "_" + std::to_string(suffix++) + ".mat.json5");
+    }
+
+    material_t m;
+    material_asset_io::makeDefault(&m, safe.c_str());
+    bool ok = material_asset_io::writeFile(target.string(), m);
+    // The makeDefault STRDUP'd name; free it (the engine owns material_t now
+    // only conceptually — we never push it into a model_t.materials array).
+    if (m.name) FREE(m.name);
+
+    if (ok) {
+        if (console_) {
+            console_->log(std::string("[Material] created: ") + target.string());
+        }
+    } else {
+        bus_.emit(kEvtLogError,
+            std::string("[Material] failed to write: ") + target.string());
+    }
+}
+
 void EditorApp::loadProjectFXShaders() {
     if (projectPath_.empty()) return;
     namespace fs = std::filesystem;
@@ -714,6 +764,50 @@ void EditorApp::drawCookValidationPopup() {
             cookPrompt_.paths.clear();
             cookPrompt_.zipPath.clear();
             cookPrompt_.issues.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+}
+
+void EditorApp::drawNewMaterialPopup() {
+    // One-shot OpenPopup trigger (same pattern as drawCookValidationPopup).
+    if (newMaterialPromptOpen_) {
+        ImGui::OpenPopup("New Material Asset");
+        newMaterialPromptOpen_ = false;
+        newMaterialNameBuf_[0] = 0;
+    }
+
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    if (ImGui::BeginPopupModal("New Material Asset", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted("Create a new .mat.json5 asset");
+        ImGui::TextDisabled("Target: <project>/assets/materials/");
+        ImGui::Dummy(ImVec2(0, 6));
+
+        ImGui::TextUnformatted("Name:");
+        ImGui::SetNextItemWidth(300.0f);
+        // Auto-focus the input on first frame for keyboard ergonomics.
+        if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+        bool submitOnEnter = ImGui::InputText("##matname",
+            newMaterialNameBuf_, sizeof(newMaterialNameBuf_),
+            ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::TextDisabled("Allowed: A-Z a-z 0-9 _ - (spaces → underscore)");
+
+        ImGui::Dummy(ImVec2(0, 6));
+        const bool canCreate = newMaterialNameBuf_[0] != 0;
+
+        ImGui::BeginDisabled(!canCreate);
+        if (ImGui::Button("Create", ImVec2(96, 0)) ||
+            (submitOnEnter && canCreate)) {
+            createMaterialAsset(newMaterialNameBuf_);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(96, 0))) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -1013,6 +1107,18 @@ void EditorApp::drawMenubar() {
                 "Existing files are NOT overwritten — your edits are safe.");
         }
         ImGui::Separator();
+        // Material asset creation — opens a name-prompt modal. The BeginPopupModal
+        // is in drawNewMaterialPopup(); we just flip the trigger-flag here.
+        if (ImGui::MenuItem("New Material Asset...")) {
+            newMaterialPromptOpen_ = true;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip(
+                "Creates a new .mat.json5 file under\n"
+                "<project>/assets/materials/. Default PBR settings;\n"
+                "edit afterwards in the Project panel.");
+        }
+        ImGui::Separator();
         if (ImGui::MenuItem("Generate Lua API Stubs (force)")) {
             generateLuaStubs(true);
         }
@@ -1078,6 +1184,8 @@ void EditorApp::drawFrame() {
 
     // Phase 5c — pre-cook validation modal (top-layer).
     drawCookValidationPopup();
+    // Blokk 2.2 — Tools → New Material Asset modal (top-layer).
+    drawNewMaterialPopup();
 }
 
 void EditorApp::run() {

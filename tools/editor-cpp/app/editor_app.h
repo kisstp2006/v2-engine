@@ -5,6 +5,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "../assets/asset_manager.h"
 #include "../core/event_bus.h"
 #include "../core/selection_service.h"
 #include "../core/task_queue.h"
@@ -104,6 +105,7 @@ public:
     SelectionService& selection() { return selection_; }
     CommandStack&     commands()  { return commands_; }
     PlayMode&         play()      { return play_; }
+    AssetManager&     assets()    { return assets_; }
     ScriptHost&       scriptHost();                      /* lazy-init */
     LuaRepl&          luaRepl();                          /* lazy-init */
     CookRunner&       cookRunner();                       /* lazy-init */
@@ -192,6 +194,9 @@ private:
     MainThreadQueue  mainQueue_;
     SceneService     scene_;
     SelectionService selection_{bus_};
+    // AssetManager — Refaktor F1. Constructed AFTER bus_ + projectPath_; the
+    // header tag-order matters because we hand both to its ctor.
+    AssetManager     assets_{bus_, projectPath_};
     CommandStack     commands_;
     PlayMode         play_;
     std::unique_ptr<ScriptHost>  scriptHost_;

@@ -1,8 +1,6 @@
 #pragma once
 
-#include <chrono>
 #include <cstdint>
-#include <filesystem>
 #include <string>
 #include <unordered_map>
 
@@ -22,40 +20,29 @@ namespace editor {
 //   if (failed.shouldRetry(path)) failed.erase(path);
 //   uint64_t now_mtime = mtimeNs(path);
 //   if (mtimes[path] != now_mtime) { cache.erase(path); mtimes[path] = now_mtime; }
+//
+// Refaktor F1 note: implementation moved to asset_cache.cpp so this header
+// no longer drags in <filesystem>/<chrono>. The motor's engine.h macros
+// (`set`, `obj`, `is`, ...) collide with <xlocale> internals when STL is
+// included AFTER engine.h, so keeping this header STL-light lets dependents
+// include it from any spot in the include chain.
 
-inline uint64_t mtimeNs(const std::string& path) {
-    std::error_code ec;
-    auto t = std::filesystem::last_write_time(path, ec);
-    if (ec) return 0;
-    return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
-        t.time_since_epoch()).count();
-}
-
-inline double nowSeconds() {
-    using namespace std::chrono;
-    return duration_cast<duration<double>>(
-        steady_clock::now().time_since_epoch()).count();
-}
+uint64_t mtimeNs(const std::string& path);
+double   nowSeconds();
 
 class FailedPathSet {
 public:
     // Timeout (seconds) — retry after 2.0s by default.
     double retry_after = 2.0;
 
-    void insert(const std::string& path) { entries_[path] = nowSeconds(); }
-    void erase(const std::string& path) { entries_.erase(path); }
+    void insert(const std::string& path);
+    void erase(const std::string& path);
 
     // true if inside AND still fresh (NO retry needed).
-    bool isFresh(const std::string& path) const {
-        auto it = entries_.find(path);
-        if (it == entries_.end()) return false;
-        return (nowSeconds() - it->second) < retry_after;
-    }
+    bool isFresh(const std::string& path) const;
 
     // true if worth retrying (either wasn't in, or expired).
-    bool shouldRetry(const std::string& path) const {
-        return !isFresh(path);
-    }
+    bool shouldRetry(const std::string& path) const;
 
 private:
     std::unordered_map<std::string, double> entries_;

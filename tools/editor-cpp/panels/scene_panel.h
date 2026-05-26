@@ -46,11 +46,9 @@ private:
     int      width_  = 0;
     int      height_ = 0;
 
-    std::unordered_map<std::string, model_t>   modelCache_;
-    std::unordered_map<std::string, skybox_t>  skyboxCache_;
-    std::unordered_map<std::string, uint64_t>  skyboxMtimes_;
-    AssetMtimes                                modelMtimes_;
-    FailedPathSet                              failedPaths_;
+    // Asset caches (modelCache_, skyboxCache_, modelMtimes_, failedPaths_,
+    // pathCache_) live in editor::AssetManager (Refaktor F1) — accessed via
+    // app.assets(). No per-panel cache state remains here.
 
     // Shadowmap (M12-bonus). Lazy init on the first render-frame.
     shadowmap_t sm_{};
@@ -69,14 +67,9 @@ private:
     std::unordered_set<std::string> frameModelPaths_;
     int                             frameMeshCount_ = 0;
 
-    // Per-node (relPath → absPath) cache. asset_path::toAbsolute() calls
-    // fs::weakly_canonical() which is a Windows syscall (~170 μs); doing
-    // it every frame for every mesh costs ~2 ms / frame in non-trivial
-    // scenes. Cache keyed by `obj*` (stable node id); the stored relPath
-    // matches the source so we auto-invalidate when the Inspector edits
-    // the MeshRenderer.model_path field — no manual eviction needed.
-    struct PathCacheEntry { std::string rel; std::string abs; };
-    std::unordered_map<obj*, PathCacheEntry> pathCache_;
+    // Per-node relPath→absPath cache lives in AssetManager (Refaktor F1) —
+    // app.assets().absPathFor(node, relPath) does the same work as the old
+    // pathCache_ + asset_path::toAbsolute pair.
 
     // Flat scene-node lists — rebuilt only on tree mutation, iterated
     // every frame instead of walking the obj-tree recursively. With ~42

@@ -44,9 +44,7 @@ ScenePanel::~ScenePanel() {
         shadowmap_destroy(&sm_);
         sm_init_ = false;
     }
-    for (auto& kv : skyboxCache_) skybox_destroy(&kv.second);
-    skyboxCache_.clear();
-    skyboxMtimes_.clear();
+    // Skybox cleanup runs in AssetManager dtor (shared with GamePanel).
 }
 
 void ScenePanel::ensureFbo(int w, int h) {
@@ -242,28 +240,12 @@ skybox_t* ScenePanel::resolveSkybox(EditorApp& app) {
     editor_skybox_get(skyNode, &skyPath, &reflPath, &envPath, &render_bg);
     if (!skyPath || !*skyPath) return nullptr;
 
-    std::string absSky = asset_path::toAbsolute(skyPath, app.projectPath());
-    if (!is_file(absSky.c_str())) return nullptr;
-
-    uint64_t mt_now = mtimeNs(absSky);
-    auto mt_it = skyboxMtimes_.find(absSky);
-    auto it    = skyboxCache_.find(absSky);
-    if (it != skyboxCache_.end() && mt_it != skyboxMtimes_.end() && mt_it->second != mt_now) {
-        skybox_destroy(&it->second);
-        skyboxCache_.erase(it);
-        it = skyboxCache_.end();
-    }
-    if (it == skyboxCache_.end()) {
-        std::string absRefl = (reflPath && *reflPath)
-                            ? asset_path::toAbsolute(reflPath, app.projectPath()) : absSky;
-        std::string absEnv  = (envPath && *envPath)
-                            ? asset_path::toAbsolute(envPath, app.projectPath()) : absSky;
-        skybox_t sky = skybox(absSky.c_str(), absRefl.c_str(), absEnv.c_str());
-        auto ins = skyboxCache_.emplace(absSky, sky);
-        it = ins.first;
-        skyboxMtimes_[absSky] = mt_now;
-    }
-    return &it->second;
+    std::string absSky  = asset_path::toAbsolute(skyPath,  app.projectPath());
+    std::string absRefl = (reflPath && *reflPath)
+                        ? asset_path::toAbsolute(reflPath, app.projectPath()) : std::string{};
+    std::string absEnv  = (envPath && *envPath)
+                        ? asset_path::toAbsolute(envPath,  app.projectPath()) : std::string{};
+    return app.assets().loadSkybox(absSky, absRefl, absEnv);
 }
 
 void ScenePanel::renderMeshNode(obj* node, EditorApp& app,
@@ -272,128 +254,67 @@ void ScenePanel::renderMeshNode(obj* node, EditorApp& app,
     const char* relPath = editor_mesh_renderer_path(node);
     if (!relPath || !*relPath) return;
 
-    // Phase 4a — render-time abs-resolve. The stored path is project-relative,
-    // but the motor's `model()` / `is_file()` expect absolute. The cache-key is abs.
-    // OPTIMIZATION: asset_path::toAbsolute internally calls
-    // fs::weakly_canonical() — a real Windows syscall (~170 μs each). We cache
-    // the (relPath → absPath) leap per `obj*` and skip the syscall as long
-    // as the source relPath hasn't changed. Auto-invalidating: a different
-    // relPath string mismatches → we recompute.
+    // Refaktor F1: rel→abs resolve and model load both go through AssetManager.
+    // The per-obj* path cache + the per-path is_file/mtime/failedPaths/load
+    // chain that used to live here now live in `app.assets()` and are shared
+    // between Scene/Game/Scene2D panels.
     std::string absPath;
     {
         EDITOR_PROFILE("Editor.Scene.Mesh.PathResolve");
-        auto pcIt = pathCache_.find(node);
-        if (pcIt != pathCache_.end() && pcIt->second.rel == relPath) {
-            absPath = pcIt->second.abs;
-        } else {
-            absPath = asset_path::toAbsolute(relPath, app.projectPath());
-            pathCache_[node] = PathCacheEntry{relPath, absPath};
-        }
-    }
-    const std::string& path = absPath;
-
-    // FailedPaths timeout: if the user moved/deleted the file, we already
-    // know it failed recently — bail without re-stat-ing.
-    if (failedPaths_.isFresh(path)) return;
-
-    // OPTIMIZATION: only stat the file when the cache has no entry. A path
-    // that's already in modelCache_ was successfully loaded earlier, so
-    // file existence is implicit. The mtime-poll below (inside CacheLookup)
-    // is the canonical way to detect on-disk changes — and that's also a
-    // single stat, not two. Previous code did is_file() + mtimeNs() EVERY
-    // frame on EVERY mesh: 12 meshes × 2 stat() syscalls × 60fps ≈ 1440 stat/s
-    // on Windows — costed ~3-4 ms per frame just to confirm files we
-    // already loaded still exist.
-    if (modelCache_.find(path) == modelCache_.end()) {
-        EDITOR_PROFILE("Editor.Scene.Mesh.IsFileCheck");
-        failedPaths_.erase(path);
-        if (!is_file(path.c_str())) {
-            failedPaths_.insert(path);
-            app.bus().emit("log",
-                std::string("[Mesh] file not found: ") + relPath);
-            return;
-        }
-    } else {
-        // Cached path → clear any stale failedPaths entry (idempotent).
-        failedPaths_.erase(path);
+        absPath = app.assets().absPathFor(node, relPath);
     }
 
-    // Per-frame mesh tracking for the Profiler. Insert AFTER the existence
-    // gate so missing-file ghosts don't inflate the counts. We track BEFORE
-    // any cache lookup or render work, so the count is "how many meshes
-    // the walk actually attempted this frame".
-    ++frameMeshCount_;
-    frameModelPaths_.insert(path);
-
-    // Cache lookup + mtime poll + (cold path) load. Counts how much we pay
-    // just to acquire the cached model_t pointer per mesh per frame.
-    std::unordered_map<std::string, model_t>::iterator it;
+    model_t* m;
     {
         EDITOR_PROFILE("Editor.Scene.Mesh.CacheLookup");
-        uint64_t mt_now = mtimeNs(path);
-        auto mt_it = modelMtimes_.find(path);
-        if (mt_it != modelMtimes_.end() && mt_it->second != mt_now) {
-            modelCache_.erase(path);
-            app.bus().emit("log", std::string("[Mesh] reloaded (mtime): ") + relPath);
-        }
-
-        it = modelCache_.find(path);
-        if (it == modelCache_.end()) {
-            model_t mt = model(path.c_str(), 0);
-            if (!mt.iqm) {
-                failedPaths_.insert(path);
-                app.bus().emit("log", std::string("[Mesh] load failed: ") + relPath);
-                return;
-            }
-            auto ins = modelCache_.emplace(path, mt);
-            it = ins.first;
-            modelMtimes_[path] = mt_now;
-            app.bus().emit("log", std::string("[Mesh] loaded: ") + relPath);
-        }
+        m = app.assets().loadModel(absPath, relPath);
+        if (!m) return;   // not on disk, in failedPaths timeout, or load failed
     }
 
+    // Per-frame mesh tracking for the Profiler. Insert AFTER the load gate
+    // so missing-file ghosts don't inflate the counts. Tracks "how many
+    // meshes were actually drawable this frame".
+    ++frameMeshCount_;
+    frameModelPaths_.insert(absPath);
+
     // Engine-side uniform bind: lights UBO + shadow texture + fog block +
-    // skybox/IBL textures. These all happen BEFORE the actual draw call, and
-    // each one fires a chain of `uniform_set2` + `shader2_adduniforms` work.
-    // Tracked separately from ModelRender so we can tell whether the cost is
-    // in the prep or in the GL draw itself.
+    // skybox/IBL textures. Tracked separately from ModelRender so we can
+    // tell whether the cost is in the prep or in the GL draw itself.
     {
         EDITOR_PROFILE("Editor.Scene.Mesh.UniformPrep");
         if (!lights.empty()) {
-            model_light(&it->second, (unsigned)lights.size(),
+            model_light(m, (unsigned)lights.size(),
                         const_cast<light_t*>(lights.data()));
         } else {
-            model_light(&it->second, 0, nullptr);
+            model_light(m, 0, nullptr);
         }
-        model_shadow(&it->second, sm_init_ ? &sm_ : nullptr);
+        model_shadow(m, sm_init_ ? &sm_ : nullptr);
 
         if (fogNode) {
             int mode = 0; vec3 color = {0,0,0};
             float start = 0.f, end = 1.f, density = 0.f;
             editor_fog_settings_get(fogNode, &mode, &color, &start, &end, &density);
-            model_fog(&it->second, (unsigned)mode, color, start, end, density);
+            model_fog(m, (unsigned)mode, color, start, end, density);
         } else {
             vec3 black = {0,0,0};
-            model_fog(&it->second, 0u, black, 0.f, 1.f, 0.f);
+            model_fog(m, 0u, black, 0.f, 1.f, 0.f);
         }
         if (sky) {
-            model_skybox(&it->second, *sky);
+            model_skybox(m, *sky);
         } else {
             skybox_t empty = {0};
-            model_skybox(&it->second, empty);
+            model_skybox(m, empty);
         }
     }
 
     // Material overrides (Blokk 2.5) — per-slot asset-ref + inline overlay.
-    // Cache: skip the ~1.5 KB struct-copy + name-match work if THIS node
-    // already had its overrides applied to its model since the last scene
-    // mutation. `overridesApplied_` is cleared by the bus handlers above
-    // on any kEvtSceneDirty et al., so an Inspector edit re-triggers on
-    // the next frame.
+    // Skip the ~1.5 KB struct-copy + name-match work if THIS node already had
+    // its overrides applied since the last scene mutation. The bus handlers
+    // in wireBusIfNeeded_() clear overridesApplied_ on kEvtSceneDirty et al.
     if (overridesApplied_.find(node) == overridesApplied_.end()) {
         EDITOR_PROFILE("Editor.Scene.Mesh.MaterialOverrides");
         material_override_io::applyOverridesToModel(
-            node, &it->second, app.projectPath());
+            node, m, app.projectPath());
         overridesApplied_.insert(node);
     }
 
@@ -401,7 +322,7 @@ void ScenePanel::renderMeshNode(obj* node, EditorApp& app,
     {
         EDITOR_PROFILE("Editor.Scene.Mesh.PivotCompose");
         editor_mesh_renderer_compose_pivot(node, pivot);
-        if (it->second.flags & MODEL_GLTF_SKINNED) {
+        if (m->flags & MODEL_GLTF_SKINNED) {
             mat44 zrot180; id44(zrot180); zrot180[0] = -1.0f; zrot180[5] = -1.0f;
             mat44 tmp; multiply44x2(tmp, pivot, zrot180);
             memcpy(pivot, tmp, sizeof(mat44));
@@ -410,27 +331,26 @@ void ScenePanel::renderMeshNode(obj* node, EditorApp& app,
     // pass = -1 → every default pass (lighting, shading, shadow-sampling).
     {
         EDITOR_PROFILE("Editor.Scene.Mesh.ModelRender");
-        model_render(&it->second, cam_.proj, cam_.view, &pivot, 1, -1);
+        model_render(m, cam_.proj, cam_.view, &pivot, 1, -1);
     }
 }
 
 void ScenePanel::renderMeshShadowOnly(obj* node, EditorApp& app) {
     const char* relPath = editor_mesh_renderer_path(node);
     if (!relPath || !*relPath) return;
-    std::string absPath = asset_path::toAbsolute(relPath, app.projectPath());
-    if (failedPaths_.isFresh(absPath)) return;
-    auto it = modelCache_.find(absPath);
-    if (it == modelCache_.end()) return;   // model not yet cached (next frame)
+    std::string absPath = app.assets().absPathFor(node, relPath);
+    model_t* m = app.assets().modelByAbsPath(absPath);
+    if (!m) return;   // not yet cached — main pass will load on its frame
     mat44 pivot;
     editor_mesh_renderer_compose_pivot(node, pivot);
     // Same skinned-glTF flip as the main render-walk, otherwise the shadow
     // silhouette wouldn't match the visible mesh.
-    if (it->second.flags & MODEL_GLTF_SKINNED) {
+    if (m->flags & MODEL_GLTF_SKINNED) {
         mat44 zrot180; id44(zrot180); zrot180[0] = -1.0f; zrot180[5] = -1.0f;
         mat44 tmp; multiply44x2(tmp, pivot, zrot180);
         memcpy(pivot, tmp, sizeof(mat44));
     }
-    model_render(&it->second, cam_.proj, cam_.view, &pivot, 1,
+    model_render(m, cam_.proj, cam_.view, &pivot, 1,
                  RENDER_PASS_SHADOW);
 }
 
@@ -448,15 +368,14 @@ void ScenePanel::walkShadowPass(obj* node, EditorApp& app) {
 
     // Find a prototype model — the first compatible cached mesh. The
     // prototype provides the shadow shader handle + cached uniform_t
-    // structs the batch uses.
+    // structs the batch uses. Refaktor F1: iterate the shared AssetManager
+    // model cache; any loaded model with a compatible shadow shader works.
     model_t* proto = nullptr;
-    for (obj* m : meshNodes_) {
-        auto pcIt = pathCache_.find(m);
-        if (pcIt == pathCache_.end()) continue;
-        auto mcIt = modelCache_.find(pcIt->second.abs);
-        if (mcIt == modelCache_.end()) continue;
-        if (ShadowBatch::isCompatible(&mcIt->second)) {
-            proto = &mcIt->second;
+    for (const auto& kv : app.assets().models()) {
+        // Cast away const for ShadowBatch (it only reads the model_t).
+        model_t* candidate = const_cast<model_t*>(&kv.second);
+        if (ShadowBatch::isCompatible(candidate)) {
+            proto = candidate;
             break;
         }
     }
@@ -475,10 +394,11 @@ void ScenePanel::walkShadowPass(obj* node, EditorApp& app) {
     // only covers ~1/6 of a sphere).
     const frustum sh_frustum = sm_.shadow_frustum;
     for (obj* m : meshNodes_) {
-        auto pcIt = pathCache_.find(m);
-        if (pcIt == pathCache_.end()) continue;
-        auto mcIt = modelCache_.find(pcIt->second.abs);
-        if (mcIt == modelCache_.end()) continue;
+        const char* relPath = editor_mesh_renderer_path(m);
+        if (!relPath || !*relPath) continue;
+        std::string absPath = app.assets().absPathFor(m, relPath);
+        model_t* mp = app.assets().modelByAbsPath(absPath);
+        if (!mp) continue;
 
         mat44 pivot;
         editor_mesh_renderer_compose_pivot(m, pivot);
@@ -488,18 +408,18 @@ void ScenePanel::walkShadowPass(obj* node, EditorApp& app) {
         // cast). `frustum_cull_` panel-toggle controls whether ANY cull runs.
         bool can_cull_sh = frustum_cull_ &&
                            editor_mesh_renderer_cull_mode(m) == 0 &&
-                           !(mcIt->second.flags & MODEL_GLTF_SKINNED) &&
-                           mcIt->second.num_joints == 0;
+                           !(mp->flags & MODEL_GLTF_SKINNED) &&
+                           mp->num_joints == 0;
         if (can_cull_sh) {
-            sphere bs = model_bsphere(mcIt->second, pivot);
+            sphere bs = model_bsphere(*mp, pivot);
             if (!frustum_test_sphere(sh_frustum, bs)) {
                 ++sh_culled;
                 continue;
             }
         }
 
-        if (ShadowBatch::isCompatible(&mcIt->second)) {
-            shadow_batch_.draw(&mcIt->second, pivot);
+        if (ShadowBatch::isCompatible(mp)) {
+            shadow_batch_.draw(mp, pivot);
             ++batched;
         } else {
             // Skinned / incompatible — slow path. Must end the batch first
@@ -507,13 +427,13 @@ void ScenePanel::walkShadowPass(obj* node, EditorApp& app) {
             // skinned-glTF case rebinds the same shader_info[1] but goes
             // through model_render's full setup).
             shadow_batch_.endFace();
-            if (mcIt->second.flags & MODEL_GLTF_SKINNED) {
+            if (mp->flags & MODEL_GLTF_SKINNED) {
                 mat44 zrot180; id44(zrot180);
                 zrot180[0] = -1.0f; zrot180[5] = -1.0f;
                 mat44 tmp; multiply44x2(tmp, pivot, zrot180);
                 memcpy(pivot, tmp, sizeof(mat44));
             }
-            model_render(&mcIt->second, cam_.proj, cam_.view, &pivot, 1,
+            model_render(mp, cam_.proj, cam_.view, &pivot, 1,
                          RENDER_PASS_SHADOW);
             shadow_batch_.beginFace(proto, &sm_, cam_.proj, cam_.view);
             ++fellback;
@@ -613,19 +533,15 @@ void ScenePanel::walkAndRender(obj* node, EditorApp& app,
 
     int rendered = 0, culled = 0;
     for (obj* m : meshNodes_) {
-        // Resolve the model_t pointer via the same path/modelCache_ chain
-        // renderMeshNode uses — we need the bounding sphere BEFORE the
-        // full setup. Cheap: pathCache hit + modelCache hit.
-        auto pcIt = pathCache_.find(m);
-        if (pcIt == pathCache_.end()) {
-            // First sighting → renderMeshNode will populate the cache. Don't
-            // cull yet; the prep work will run.
-            renderMeshNode(m, app, lights, fogNode, sky);
-            ++rendered;
-            continue;
-        }
-        auto mcIt = modelCache_.find(pcIt->second.abs);
-        if (mcIt == modelCache_.end()) {
+        // Resolve the model_t pointer via the shared AssetManager cache.
+        // We need the bounding sphere BEFORE the full setup, so we do a
+        // cache-only lookup. First-sighting / load-pending nodes fall through
+        // to renderMeshNode which does the actual load.
+        const char* relPath = editor_mesh_renderer_path(m);
+        if (!relPath || !*relPath) continue;
+        std::string absPath = app.assets().absPathFor(m, relPath);
+        model_t* mp = app.assets().modelByAbsPath(absPath);
+        if (!mp) {
             renderMeshNode(m, app, lights, fogNode, sky);
             ++rendered;
             continue;
@@ -639,12 +555,12 @@ void ScenePanel::walkAndRender(obj* node, EditorApp& app,
         //   - panel toolbar `frustum_cull_` toggle OFF → bypass for debug.
         bool can_cull = frustum_cull_ &&
                         editor_mesh_renderer_cull_mode(m) == 0 &&
-                        !(mcIt->second.flags & MODEL_GLTF_SKINNED) &&
-                        mcIt->second.num_joints == 0;
+                        !(mp->flags & MODEL_GLTF_SKINNED) &&
+                        mp->num_joints == 0;
         if (can_cull) {
             mat44 cull_pivot;
             editor_mesh_renderer_compose_pivot(m, cull_pivot);
-            sphere bs = model_bsphere(mcIt->second, cull_pivot);
+            sphere bs = model_bsphere(*mp, cull_pivot);
             if (!frustum_test_sphere(cam_frustum, bs)) {
                 ++culled;
                 continue;
@@ -656,7 +572,7 @@ void ScenePanel::walkAndRender(obj* node, EditorApp& app,
         // albedo.color.a < 1 OR the albedo texture has a non-trivial
         // alpha channel). Distance is squared (sorting key only) from
         // the mesh's pivot to the camera position.
-        if (model_has_transparency(&mcIt->second)) {
+        if (model_has_transparency(mp)) {
             mat44 dist_pivot;
             editor_mesh_renderer_compose_pivot(m, dist_pivot);
             vec3 cam_pos = pos44(cam_.view);

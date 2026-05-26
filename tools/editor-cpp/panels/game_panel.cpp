@@ -16,6 +16,8 @@
 #include "../app/editor_app.h"
 #include "../app/panel_registry.h"
 #include "../components/components_api.h"
+#include "../core/event_bus.h"
+#include "../core/events.h"
 #include "../core/profile_scope.h"
 #include "../persistence/material_override_io.h"
 #include "../runtime/script_host.h"
@@ -60,16 +62,50 @@ obj* GamePanel::findActiveCamera(obj* node) {
 }
 
 void GamePanel::collectLights(obj* node, std::vector<light_t>& out) {
-    if (!node) return;
-    if (editor_obj_is_light_ref(node)) {
+    // Flat-list path: iterate the cached lightNodes_ rebuilt only on tree
+    // mutation. The `node` argument is kept for ABI parity but unused.
+    (void)node;
+    out.reserve(lightNodes_.size());
+    for (obj* n : lightNodes_) {
         light_t l;
-        editor_light_ref_to_light_t(node, &l);
+        editor_light_ref_to_light_t(n, &l);
         out.push_back(l);
     }
-    int n = editor_obj_child_count(node);
-    for (int i = 0; i < n; ++i) {
-        collectLights(editor_obj_child_at(node, i), out);
+}
+
+// One-time bus subscription: any scene mutation (Inspector edit, gizmo drag,
+// AddNode, etc.) sets flatListsDirty_ + clears overridesApplied_. Wired
+// lazily because EditorApp isn't available at ctor time.
+void GamePanel::wireBusIfNeeded_(EditorApp& app) {
+    if (busWired_) return;
+    busWired_ = true;
+    auto invalidateAll = [this](const std::any&){
+        flatListsDirty_ = true;
+        overridesApplied_.clear();
+    };
+    app.bus().on(kEvtSceneDirty,    invalidateAll);
+    app.bus().on(kEvtSceneReplaced, invalidateAll);
+    app.bus().on(kEvtNodeAdded,     invalidateAll);
+    app.bus().on(kEvtNodeRemoved,   invalidateAll);
+}
+
+// DFS rebuild that fills meshNodes_ + lightNodes_ from the scene tree.
+// Only runs on tree mutation; render frames iterate the flat lists.
+void GamePanel::rebuildFlatLists_(obj* root) {
+    meshNodes_.clear();
+    lightNodes_.clear();
+    std::vector<obj*> stack;
+    if (root) stack.push_back(root);
+    while (!stack.empty()) {
+        obj* n = stack.back(); stack.pop_back();
+        if (editor_obj_is_mesh_renderer(n)) meshNodes_.push_back(n);
+        else if (editor_obj_is_light_ref(n)) lightNodes_.push_back(n);
+        int cnt = editor_obj_child_count(n);
+        for (int i = 0; i < cnt; ++i) {
+            if (obj* c = editor_obj_child_at(n, i)) stack.push_back(c);
+        }
     }
+    flatListsDirty_ = false;
 }
 
 // Depth-first lookup of the first FogSettings in the scene (NULL if none).
@@ -246,85 +282,101 @@ skybox_t* GamePanel::resolveSkybox(EditorApp& app) {
 void GamePanel::walkAndRenderMeshes(obj* node, EditorApp& app, camera_t& cam,
                                     const std::vector<light_t>& lights,
                                     obj* fogNode, skybox_t* sky) {
-    if (!node) return;
-    if (editor_obj_is_mesh_renderer(node)) {
-        const char* relPath = editor_mesh_renderer_path(node);
-        std::string absPath = (relPath && *relPath)
-            ? asset_path::toAbsolute(relPath, app.projectPath())
-            : std::string();
-        const std::string& path = absPath;
-        if (!path.empty() && !failedPaths_.isFresh(path) && is_file(path.c_str())) {
-            failedPaths_.erase(path);
-            uint64_t mt_now = mtimeNs(path);
-            auto mt_it = modelMtimes_.find(path);
-            if (mt_it != modelMtimes_.end() && mt_it->second != mt_now) {
-                modelCache_.erase(path);
-            }
-            auto it = modelCache_.find(path);
-            if (it == modelCache_.end()) {
-                model_t mt = model(path.c_str(), 0);
-                if (mt.iqm) {
-                    auto ins = modelCache_.emplace(path, mt);
-                    it = ins.first;
-                    modelMtimes_[path] = mt_now;
-                } else {
-                    failedPaths_.insert(path);
-                }
-            }
-            if (it != modelCache_.end()) {
-                if (!lights.empty()) {
-                    model_light(&it->second, (unsigned)lights.size(),
-                                const_cast<light_t*>(lights.data()));
-                } else {
-                    model_light(&it->second, 0, nullptr);
-                }
-                model_shadow(&it->second, sm_init_ ? &sm_ : nullptr);
-                // Per-frame fog uniforms. shader2_adduniforms (render_shader2.h:579)
-                // dedupes on type_name so this won't grow the uniform array.
-                if (fogNode) {
-                    int mode = 0; vec3 color = {0,0,0};
-                    float start = 0.f, end = 1.f, density = 0.f;
-                    editor_fog_settings_get(fogNode, &mode, &color,
-                                            &start, &end, &density);
-                    model_fog(&it->second, (unsigned)mode,
-                              color, start, end, density);
-                } else {
-                    // No scene-wide FogSettings → disable fog explicitly
-                    // (the model may have been cached with a previous setup).
-                    vec3 black = {0,0,0};
-                    model_fog(&it->second, 0u, black, 0.f, 1.f, 0.f);
-                }
-                // Skybox / IBL — bind the resolved skybox_t to the model so the
-                // PBR shader's HAS_TEX_SKY* uniforms turn on. Empty skybox if
-                // no Skybox node, so the model falls back to non-IBL shading.
-                if (sky) {
-                    model_skybox(&it->second, *sky);
-                } else {
-                    skybox_t empty = {0};
-                    model_skybox(&it->second, empty);
-                }
-                // Material overrides (Blokk 2.5) — apply per-slot asset-ref +
-                // inline overlay before model_render. Idempotent (cache-friendly).
-                material_override_io::applyOverridesToModel(
-                    node, &it->second, app.projectPath());
-                mat44 pivot;
-                editor_mesh_renderer_compose_pivot(node, pivot);
-                // Skinned-glTF X+Y flip compensation (= 180° around Z):
-                // the loader leaves the vertex in glTF-native space so the
-                // skinning math is clean, and we apply the same flip here
-                // on the model pivot instead.
-                if (it->second.flags & MODEL_GLTF_SKINNED) {
-                    mat44 zrot180; id44(zrot180); zrot180[0] = -1.0f; zrot180[5] = -1.0f;
-                    mat44 tmp; multiply44x2(tmp, pivot, zrot180);
-                    memcpy(pivot, tmp, sizeof(mat44));
-                }
-                model_render(&it->second, cam.proj, cam.view, &pivot, 1, -1);
+    // Flat-list path with the same caches as ScenePanel — no recursion.
+    // `node` is kept for ABI parity but ignored; we use meshNodes_ instead.
+    (void)node;
+    for (obj* m : meshNodes_) {
+        const char* relPath = editor_mesh_renderer_path(m);
+        if (!relPath || !*relPath) continue;
+
+        // PathResolve cache (relPath -> absPath). asset_path::toAbsolute()
+        // calls fs::weakly_canonical() (~170 us syscall) when uncached.
+        std::string absPath;
+        {
+            auto pcIt = pathCache_.find(m);
+            if (pcIt != pathCache_.end() && pcIt->second.rel == relPath) {
+                absPath = pcIt->second.abs;
+            } else {
+                absPath = asset_path::toAbsolute(relPath, app.projectPath());
+                pathCache_[m] = PathCacheEntry{relPath, absPath};
             }
         }
-    }
-    int n = editor_obj_child_count(node);
-    for (int i = 0; i < n; ++i) {
-        walkAndRenderMeshes(editor_obj_child_at(node, i), app, cam, lights, fogNode, sky);
+        const std::string& path = absPath;
+        if (failedPaths_.isFresh(path)) continue;
+
+        // is_file() skip when the model is already cached. The cache itself
+        // is implicit existence proof (it was successfully loaded earlier).
+        if (modelCache_.find(path) == modelCache_.end()) {
+            failedPaths_.erase(path);
+            if (!is_file(path.c_str())) {
+                failedPaths_.insert(path);
+                continue;
+            }
+        } else {
+            failedPaths_.erase(path);
+        }
+
+        // mtime poll → cache evict on disk change.
+        uint64_t mt_now = mtimeNs(path);
+        auto mt_it = modelMtimes_.find(path);
+        if (mt_it != modelMtimes_.end() && mt_it->second != mt_now) {
+            modelCache_.erase(path);
+        }
+        auto it = modelCache_.find(path);
+        if (it == modelCache_.end()) {
+            model_t mt = model(path.c_str(), 0);
+            if (mt.iqm) {
+                auto ins = modelCache_.emplace(path, mt);
+                it = ins.first;
+                modelMtimes_[path] = mt_now;
+            } else {
+                failedPaths_.insert(path);
+                continue;
+            }
+        }
+
+        // Per-frame uniforms — light list, shadowmap, fog, skybox/IBL.
+        if (!lights.empty()) {
+            model_light(&it->second, (unsigned)lights.size(),
+                        const_cast<light_t*>(lights.data()));
+        } else {
+            model_light(&it->second, 0, nullptr);
+        }
+        model_shadow(&it->second, sm_init_ ? &sm_ : nullptr);
+        if (fogNode) {
+            int mode = 0; vec3 color = {0,0,0};
+            float start = 0.f, end = 1.f, density = 0.f;
+            editor_fog_settings_get(fogNode, &mode, &color, &start, &end, &density);
+            model_fog(&it->second, (unsigned)mode, color, start, end, density);
+        } else {
+            vec3 black = {0,0,0};
+            model_fog(&it->second, 0u, black, 0.f, 1.f, 0.f);
+        }
+        if (sky) {
+            model_skybox(&it->second, *sky);
+        } else {
+            skybox_t empty = {0};
+            model_skybox(&it->second, empty);
+        }
+
+        // MaterialOverrides cache — skip the per-mesh struct copy + bit
+        // mask overlay if THIS node was already applied since last scene
+        // mutation. Cleared by bus handlers on kEvtSceneDirty et al.
+        if (overridesApplied_.find(m) == overridesApplied_.end()) {
+            material_override_io::applyOverridesToModel(
+                m, &it->second, app.projectPath());
+            overridesApplied_.insert(m);
+        }
+
+        mat44 pivot;
+        editor_mesh_renderer_compose_pivot(m, pivot);
+        if (it->second.flags & MODEL_GLTF_SKINNED) {
+            mat44 zrot180; id44(zrot180);
+            zrot180[0] = -1.0f; zrot180[5] = -1.0f;
+            mat44 tmp; multiply44x2(tmp, pivot, zrot180);
+            memcpy(pivot, tmp, sizeof(mat44));
+        }
+        model_render(&it->second, cam.proj, cam.view, &pivot, 1, -1);
     }
 }
 
@@ -349,18 +401,74 @@ void GamePanel::renderMeshShadowOnly(obj* node, camera_t& cam, EditorApp& app) {
 }
 
 void GamePanel::walkShadowPass(obj* node, camera_t& cam, EditorApp& app) {
-    if (!node) return;
-    if (editor_obj_is_mesh_renderer(node)) {
-        renderMeshShadowOnly(node, cam, app);
+    // Plan B Phase 1: batched shadow pass — bind shader + face uniforms +
+    // renderstate ONCE per face, then per-mesh fast path (uniform_set MODEL
+    // + glBindVertexArray + single glDrawElementsInstanced). Mirrors
+    // ScenePanel::walkShadowPass. Skinned meshes fall back to model_render.
+    (void)node;
+    if (meshNodes_.empty()) return;
+
+    // Find a prototype model (first compatible cached mesh) for the batch
+    // to source shader/uniform handles from.
+    model_t* proto = nullptr;
+    for (obj* m : meshNodes_) {
+        auto pcIt = pathCache_.find(m);
+        if (pcIt == pathCache_.end()) continue;
+        auto mcIt = modelCache_.find(pcIt->second.abs);
+        if (mcIt == modelCache_.end()) continue;
+        if (ShadowBatch::isCompatible(&mcIt->second)) {
+            proto = &mcIt->second;
+            break;
+        }
     }
-    int n = editor_obj_child_count(node);
-    for (int i = 0; i < n; ++i) {
-        walkShadowPass(editor_obj_child_at(node, i), cam, app);
+    if (!proto) {
+        // No compatible meshes — fall back entirely to the old per-mesh path.
+        for (obj* m : meshNodes_) renderMeshShadowOnly(m, cam, app);
+        return;
     }
+
+    shadow_batch_.beginFace(proto, &sm_, cam.proj, cam.view);
+    for (obj* m : meshNodes_) {
+        auto pcIt = pathCache_.find(m);
+        if (pcIt == pathCache_.end()) continue;
+        auto mcIt = modelCache_.find(pcIt->second.abs);
+        if (mcIt == modelCache_.end()) continue;
+
+        mat44 pivot;
+        editor_mesh_renderer_compose_pivot(m, pivot);
+
+        if (ShadowBatch::isCompatible(&mcIt->second)) {
+            shadow_batch_.draw(&mcIt->second, pivot);
+        } else {
+            // Skinned / incompatible — slow path. End the batch first so the
+            // motor's full model_render can do its own shader/state setup.
+            shadow_batch_.endFace();
+            if (mcIt->second.flags & MODEL_GLTF_SKINNED) {
+                mat44 zrot180; id44(zrot180);
+                zrot180[0] = -1.0f; zrot180[5] = -1.0f;
+                mat44 tmp; multiply44x2(tmp, pivot, zrot180);
+                memcpy(pivot, tmp, sizeof(mat44));
+            }
+            model_render(&mcIt->second, cam.proj, cam.view, &pivot, 1,
+                         RENDER_PASS_SHADOW);
+            shadow_batch_.beginFace(proto, &sm_, cam.proj, cam.view);
+        }
+    }
+    shadow_batch_.endFace();
 }
 
 void GamePanel::renderWithCamera(obj* cameraNode, int w, int h, EditorApp& app) {
     EDITOR_PROFILE("Editor.Game.Total");
+
+    // One-time bus subscription + lazy rebuild of the flat node lists.
+    // Without these, the per-frame walks would still recurse the obj-tree
+    // and asset_path::toAbsolute would syscall every mesh every frame.
+    wireBusIfNeeded_(app);
+    if (flatListsDirty_) {
+        EDITOR_PROFILE("Editor.Game.RebuildFlatLists");
+        rebuildFlatLists_(app.scene().root());
+    }
+
     // CameraRef params → camera_t.
     vec3 pos, dir;
     float fov, nclip, fclip;

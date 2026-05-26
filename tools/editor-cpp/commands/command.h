@@ -115,6 +115,24 @@ private:
     std::string name_;
 };
 
+// RenameNodeCommand — undo/redo a single obj_setname() call. Stores the
+// old + new name strings (engine STRDUPs them; we just need the values).
+class RenameNodeCommand : public Command {
+public:
+    RenameNodeCommand(obj* node, std::string oldName, std::string newName,
+                      std::string label = "Rename");
+    void undo() override;
+    void redo() override;
+    const char* name() const override { return label_.c_str(); }
+    bool affectsObject(obj* o) const override { return o && o == node_; }
+
+private:
+    obj*        node_;
+    std::string oldName_;
+    std::string newName_;
+    std::string label_;
+};
+
 // Multi-target snapshot-command (Phase 2c). With pair (node + before + after)
 // vectors — Inspector multi-edit and multi-gizmo-drag undo support.
 class MultiObjectStateCommand : public Command {

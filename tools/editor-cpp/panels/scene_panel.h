@@ -111,6 +111,12 @@ private:
     // + renderstate_apply); the batch reduces it to ~50 μs / mesh by
     // setting all that once per face.
     ShadowBatch shadow_batch_;
+
+    // Master frustum-cull toggle (panel toolbar). When off, every mesh
+    // renders regardless of visibility — useful for debugging "why isn't
+    // my mesh showing up?" issues. Per-MeshRenderer `cull_mode` is the
+    // finer-grained override, but this is the global kill switch.
+    bool frustum_cull_ = true;
 };
 
 }  // namespace editor

@@ -285,6 +285,26 @@ void GamePanel::walkAndRenderMeshes(obj* node, EditorApp& app, camera_t& cam,
     // Flat-list path with the same caches as ScenePanel — no recursion.
     // `node` is kept for ABI parity but ignored; we use meshNodes_ instead.
     (void)node;
+
+    // Camera-frustum cull (same rationale as ScenePanel::walkAndRender).
+    mat44 projview; multiply44x2(projview, cam.proj, cam.view);
+    frustum cam_frustum = frustum_build(projview);
+    int rendered = 0, culled = 0;
+
+    // Cross-mesh transparency sort — same fix as ScenePanel. Defer
+    // transparent meshes to a second pass, back-to-front by distance.
+    struct TransparentEntry {
+        obj*    node;
+        float   dist2;
+        // Cache the resolved iterator / path so the second pass doesn't
+        // re-do pathCache/modelCache lookups + early-out checks.
+        std::unordered_map<std::string, model_t>::iterator it;
+        std::string path;
+    };
+    std::vector<TransparentEntry> transparents;
+    transparents.reserve(meshNodes_.size() / 4);
+    vec3 cam_pos = pos44(cam.view);
+
     for (obj* m : meshNodes_) {
         const char* relPath = editor_mesh_renderer_path(m);
         if (!relPath || !*relPath) continue;
@@ -335,49 +355,106 @@ void GamePanel::walkAndRenderMeshes(obj* node, EditorApp& app, camera_t& cam,
             }
         }
 
-        // Per-frame uniforms — light list, shadowmap, fog, skybox/IBL.
-        if (!lights.empty()) {
-            model_light(&it->second, (unsigned)lights.size(),
-                        const_cast<light_t*>(lights.data()));
-        } else {
-            model_light(&it->second, 0, nullptr);
+        // Camera-frustum cull — skip the per-frame uniform setup + draw
+        // when the mesh's bsphere doesn't intersect the camera frustum.
+        // Bypassed for: panel-toggle OFF / cull_mode = Always Render /
+        // skinned models (rest-pose bsphere unreliable under animation).
+        bool can_cull = frustum_cull_ &&
+                        editor_mesh_renderer_cull_mode(m) == 0 &&
+                        !(it->second.flags & MODEL_GLTF_SKINNED) &&
+                        it->second.num_joints == 0;
+        if (can_cull) {
+            mat44 cull_pivot;
+            editor_mesh_renderer_compose_pivot(m, cull_pivot);
+            sphere bs = model_bsphere(it->second, cull_pivot);
+            if (!frustum_test_sphere(cam_frustum, bs)) {
+                ++culled;
+                continue;
+            }
         }
-        model_shadow(&it->second, sm_init_ ? &sm_ : nullptr);
-        if (fogNode) {
-            int mode = 0; vec3 color = {0,0,0};
-            float start = 0.f, end = 1.f, density = 0.f;
-            editor_fog_settings_get(fogNode, &mode, &color, &start, &end, &density);
-            model_fog(&it->second, (unsigned)mode, color, start, end, density);
-        } else {
-            vec3 black = {0,0,0};
-            model_fog(&it->second, 0u, black, 0.f, 1.f, 0.f);
-        }
-        if (sky) {
-            model_skybox(&it->second, *sky);
-        } else {
-            skybox_t empty = {0};
-            model_skybox(&it->second, empty);
+        // Defer transparent meshes to a sorted second pass (back-to-front
+        // by camera distance). The motor's RENDER_PASS_TRANSPARENT enables
+        // blend but doesn't disable depth-write, so an unsorted transparent
+        // mesh would occlude any opaque mesh drawn after it (e.g. a wire
+        // basket would cut out the floor visible through its holes).
+        if (model_has_transparency(&it->second)) {
+            mat44 dist_pivot;
+            editor_mesh_renderer_compose_pivot(m, dist_pivot);
+            vec3 mesh_pos = vec3(dist_pivot[12], dist_pivot[13], dist_pivot[14]);
+            vec3 d = sub3(mesh_pos, cam_pos);
+            float d2 = d.x*d.x + d.y*d.y + d.z*d.z;
+            transparents.push_back({m, d2, it, path});
+            continue;
         }
 
-        // MaterialOverrides cache — skip the per-mesh struct copy + bit
-        // mask overlay if THIS node was already applied since last scene
-        // mutation. Cleared by bus handlers on kEvtSceneDirty et al.
-        if (overridesApplied_.find(m) == overridesApplied_.end()) {
-            material_override_io::applyOverridesToModel(
-                m, &it->second, app.projectPath());
-            overridesApplied_.insert(m);
-        }
-
-        mat44 pivot;
-        editor_mesh_renderer_compose_pivot(m, pivot);
-        if (it->second.flags & MODEL_GLTF_SKINNED) {
-            mat44 zrot180; id44(zrot180);
-            zrot180[0] = -1.0f; zrot180[5] = -1.0f;
-            mat44 tmp; multiply44x2(tmp, pivot, zrot180);
-            memcpy(pivot, tmp, sizeof(mat44));
-        }
-        model_render(&it->second, cam.proj, cam.view, &pivot, 1, -1);
+        renderMeshNode_(m, app, cam, lights, fogNode, sky, &it->second);
+        ++rendered;
     }
+
+    // Second pass: transparent meshes, far → near.
+    if (!transparents.empty()) {
+        std::sort(transparents.begin(), transparents.end(),
+            [](const TransparentEntry& a, const TransparentEntry& b) {
+                return a.dist2 > b.dist2;
+            });
+        for (const auto& t : transparents) {
+            renderMeshNode_(t.node, app, cam, lights, fogNode, sky,
+                            &t.it->second);
+            ++rendered;
+        }
+    }
+
+    editor_profile_set_counter("Editor.Game.MeshesRendered",    (double)rendered);
+    editor_profile_set_counter("Editor.Game.MeshesCulled",      (double)culled);
+    editor_profile_set_counter("Editor.Game.MeshesTransparent", (double)transparents.size());
+}
+
+void GamePanel::renderMeshNode_(obj* m, EditorApp& app, camera_t& cam,
+                                const std::vector<light_t>& lights,
+                                obj* fogNode, skybox_t* sky,
+                                model_t* model) {
+    if (!model) return;
+
+    // Per-frame uniforms — light list, shadowmap, fog, skybox/IBL.
+    if (!lights.empty()) {
+        model_light(model, (unsigned)lights.size(),
+                    const_cast<light_t*>(lights.data()));
+    } else {
+        model_light(model, 0, nullptr);
+    }
+    model_shadow(model, sm_init_ ? &sm_ : nullptr);
+    if (fogNode) {
+        int mode = 0; vec3 color = {0,0,0};
+        float start = 0.f, end = 1.f, density = 0.f;
+        editor_fog_settings_get(fogNode, &mode, &color, &start, &end, &density);
+        model_fog(model, (unsigned)mode, color, start, end, density);
+    } else {
+        vec3 black = {0,0,0};
+        model_fog(model, 0u, black, 0.f, 1.f, 0.f);
+    }
+    if (sky) {
+        model_skybox(model, *sky);
+    } else {
+        skybox_t empty = {0};
+        model_skybox(model, empty);
+    }
+
+    // MaterialOverrides cache.
+    if (overridesApplied_.find(m) == overridesApplied_.end()) {
+        material_override_io::applyOverridesToModel(
+            m, model, app.projectPath());
+        overridesApplied_.insert(m);
+    }
+
+    mat44 pivot;
+    editor_mesh_renderer_compose_pivot(m, pivot);
+    if (model->flags & MODEL_GLTF_SKINNED) {
+        mat44 zrot180; id44(zrot180);
+        zrot180[0] = -1.0f; zrot180[5] = -1.0f;
+        mat44 tmp; multiply44x2(tmp, pivot, zrot180);
+        memcpy(pivot, tmp, sizeof(mat44));
+    }
+    model_render(model, cam.proj, cam.view, &pivot, 1, -1);
 }
 
 void GamePanel::renderMeshShadowOnly(obj* node, camera_t& cam, EditorApp& app) {
@@ -428,6 +505,12 @@ void GamePanel::walkShadowPass(obj* node, camera_t& cam, EditorApp& app) {
     }
 
     shadow_batch_.beginFace(proto, &sm_, cam.proj, cam.view);
+    // Per-face shadow-frustum cull. shadowmap_light updated sm_.shadow_frustum
+    // for THIS face. Sphere-vs-frustum skips meshes that this cubemap face
+    // can't possibly see — typically ~50-65% per face for a 90° cubemap face
+    // covering only 1/6 of the light's sphere.
+    const frustum sh_frustum = sm_.shadow_frustum;
+    int sh_culled = 0;
     for (obj* m : meshNodes_) {
         auto pcIt = pathCache_.find(m);
         if (pcIt == pathCache_.end()) continue;
@@ -436,6 +519,19 @@ void GamePanel::walkShadowPass(obj* node, camera_t& cam, EditorApp& app) {
 
         mat44 pivot;
         editor_mesh_renderer_compose_pivot(m, pivot);
+
+        // Frustum cull. Same gates as the main pass.
+        bool can_cull_sh = frustum_cull_ &&
+                           editor_mesh_renderer_cull_mode(m) == 0 &&
+                           !(mcIt->second.flags & MODEL_GLTF_SKINNED) &&
+                           mcIt->second.num_joints == 0;
+        if (can_cull_sh) {
+            sphere bs = model_bsphere(mcIt->second, pivot);
+            if (!frustum_test_sphere(sh_frustum, bs)) {
+                ++sh_culled;
+                continue;
+            }
+        }
 
         if (ShadowBatch::isCompatible(&mcIt->second)) {
             shadow_batch_.draw(&mcIt->second, pivot);
@@ -455,6 +551,7 @@ void GamePanel::walkShadowPass(obj* node, camera_t& cam, EditorApp& app) {
         }
     }
     shadow_batch_.endFace();
+    editor_profile_set_counter("Editor.Game.ShadowCulledPerFace", (double)sh_culled);
 }
 
 void GamePanel::renderWithCamera(obj* cameraNode, int w, int h, EditorApp& app) {
@@ -579,6 +676,11 @@ void GamePanel::draw(EditorApp& app) {
         ImGui::End();
         return;
     }
+
+    // Toolbar row — debug toggles. Mirrors the Scene panel layout.
+    ImGui::Checkbox("Frustum Cull", &frustum_cull_);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(uncheck to disable cull for debugging)");
 
     obj* cameraNode = findActiveCamera(app.scene().root());
     if (!cameraNode) {

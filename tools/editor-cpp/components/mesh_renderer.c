@@ -13,6 +13,16 @@ typedef struct MeshRenderer {
     char     *model_path;
     int       cast_shadows;
     unsigned  tint;
+    // Frustum-cull mode for the editor's render walks (Scene + Game panel).
+    //   0 = Auto    — sphere cull against the camera/shadow frustum (default;
+    //                 also automatically skipped if the model is skinned,
+    //                 since the rest-pose bsphere doesn't reflect animated
+    //                 deformation).
+    //   1 = Always  — never cull. For sky-meshes, HUD billboards, very large
+    //                 chunks (terrain) where the bsphere center is far away
+    //                 yet visible geometry intrudes the camera frustum, or
+    //                 for debug visualization meshes that must always render.
+    int       cull_mode;
     // Runtime array of MaterialOverride* (Blokk 2.4). NOT registered with
     // v2-reflection (array(obj*) isn't supported by obj_saveini); persisted
     // by MeshRendererExtraSerializer via the editor __EXTRAS__ marker.
@@ -28,6 +38,9 @@ AUTORUN {
     STRUCT(MeshRenderer, char*, model_path, "[asset:model]");
     STRUCT(MeshRenderer, int,   cast_shadows, "[bool]");
     STRUCT(MeshRenderer, rgba,  tint);
+    // cull_mode shown as a dropdown via the "[combo:..]" annotation. Older
+    // scenes loaded with cull_mode = 0 (auto) — backward compatible.
+    STRUCT(MeshRenderer, int,   cull_mode,    "[combo:Auto,Always Render]");
     // material_overrides intentionally NOT registered here — serializer
     // handles it.
 }
@@ -58,6 +71,11 @@ void editor_mesh_renderer_compose_pivot(const obj* o, mat44 out_pivot) {
     if (!editor_obj_is_mesh_renderer(o)) return;
     const MeshRenderer* m = (const MeshRenderer*)o;
     compose44(out_pivot, m->pos, eulerq(m->rot), m->scale);
+}
+
+int editor_mesh_renderer_cull_mode(const obj* o) {
+    if (!editor_obj_is_mesh_renderer(o)) return 0;
+    return ((const MeshRenderer*)o)->cull_mode;
 }
 
 // ---- MaterialOverride array API ---------------------------------------------

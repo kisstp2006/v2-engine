@@ -38,6 +38,12 @@ private:
     // cached models are silently skipped (next frame's main pass loads them).
     void renderMeshShadowOnly(obj* node, camera_t& cam, EditorApp& app);
     void walkShadowPass(obj* node, camera_t& cam, EditorApp& app);
+    // Per-mesh setup + draw helper — extracted from walkAndRenderMeshes
+    // so the opaque pass and the deferred transparent pass can share the
+    // exact same per-frame uniform setup + model_render call.
+    void renderMeshNode_(obj* m, EditorApp& app, camera_t& cam,
+                         const std::vector<light_t>& lights,
+                         obj* fogNode, skybox_t* sky, model_t* model);
     // Resolve the scene's Skybox node into a cached skybox_t* (or nullptr).
     skybox_t* resolveSkybox(EditorApp& app);
 
@@ -86,6 +92,10 @@ private:
     //     N fast draws. The single biggest CPU saving for shadow-on scenes
     //     (~40 ms / frame on a 12-mesh point-light scene).
     ShadowBatch shadow_batch_;
+
+    // (5) Master frustum-cull toggle (panel toolbar). When off, every mesh
+    //     renders regardless of visibility — debug "why isn't this on-screen?"
+    bool frustum_cull_ = true;
 };
 
 }  // namespace editor

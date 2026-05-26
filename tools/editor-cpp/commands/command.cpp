@@ -138,6 +138,25 @@ void ReparentCommand::redo() {
     }
 }
 
+// ---- RenameNodeCommand ---------------------------------------------------
+
+RenameNodeCommand::RenameNodeCommand(obj* node, std::string oldName,
+                                     std::string newName, std::string label)
+    : node_(node),
+      oldName_(std::move(oldName)),
+      newName_(std::move(newName)),
+      label_(std::move(label)) {}
+
+void RenameNodeCommand::undo() {
+    if (!node_) return;
+    obj_setname(node_, oldName_.c_str());
+}
+
+void RenameNodeCommand::redo() {
+    if (!node_) return;
+    obj_setname(node_, newName_.c_str());
+}
+
 // ---- MultiObjectStateCommand ---------------------------------------------
 
 MultiObjectStateCommand::MultiObjectStateCommand(

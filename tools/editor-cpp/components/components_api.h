@@ -33,6 +33,10 @@ API const char*  editor_mesh_renderer_path      (const struct obj* o);
 // out_pivot is a `float[16]` (mat44) composed from pos/rot/scale.
 API void         editor_mesh_renderer_compose_pivot(const struct obj* o,
                                                     float out_pivot[16]);
+// 0 = Auto (sphere frustum cull, but auto-skipped for skinned models).
+// 1 = Always Render (never cull). Used by Scene + Game panel walks to
+// keep sky / HUD / large-chunk meshes visible regardless of the frustum.
+API int          editor_mesh_renderer_cull_mode (const struct obj* o);
 
 // MaterialOverride array on the MeshRenderer (Blokk 2.4). These are NOT
 // scene-children — they live in a runtime `array(obj*) material_overrides`

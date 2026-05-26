@@ -1,6 +1,9 @@
 // STL FIRST.
 #include <algorithm>
+#include <cctype>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -27,6 +30,60 @@ std::string normSlash(std::string s) {
     std::replace(s.begin(), s.end(), '\\', '/');
     return s;
 }
+
+// Filename sanitizer for the new-asset modal — keeps A-Z a-z 0-9 _ - .
+// (allow dot for extensions like "my.thing"), maps spaces to underscore,
+// drops everything else. Used for folder + scene + script names.
+std::string sanitizeFilename(const std::string& in) {
+    std::string out;
+    out.reserve(in.size());
+    for (char c : in) {
+        if (std::isalnum((unsigned char)c) ||
+            c == '_' || c == '-' || c == '.') out.push_back(c);
+        else if (c == ' ') out.push_back('_');
+    }
+    return out;
+}
+
+// Find a unique filename in `dir` by appending _2, _3, ... before the
+// extension if the requested name already exists.
+fs::path uniqueTarget(const fs::path& dir, const std::string& stem,
+                      const std::string& ext) {
+    fs::path target = dir / (stem + ext);
+    std::error_code ec;
+    int suffix = 2;
+    while (fs::exists(target, ec)) {
+        target = dir / (stem + "_" + std::to_string(suffix++) + ext);
+    }
+    return target;
+}
+
+// Minimal default scene file. The motor's SceneIO::loadTree can read this
+// as an empty root with no children — the user fills it in by attaching
+// nodes from the editor.
+const char* kDefaultSceneJson5 = R"({
+    "scene": {
+        "name": "scene",
+        "children": []
+    }
+}
+)";
+
+// Lua script template. The editor's Script component invokes these
+// callbacks (see runtime/script_host.cpp).
+const char* kDefaultScriptLua = R"(-- Auto-generated script template.
+-- `self` is the obj* of this Script node; use `node.parent(self)` to walk
+-- up to the entity it's attached to.
+
+function on_init()
+end
+
+function on_update(dt)
+end
+
+function on_destroy()
+end
+)";
 
 }  // namespace
 
@@ -129,6 +186,39 @@ void ProjectPanel::draw(EditorApp& app) {
         }
     }
 
+    // Right-click in the empty area of the listing → "New" context menu.
+    // (Per-file context menus are NOT added here — we use the empty-area
+    // window-context popup, which matches the Hierarchy panel's pattern.)
+    if (ImGui::BeginPopupContextWindow("##projctx",
+            ImGuiPopupFlags_MouseButtonRight |
+            ImGuiPopupFlags_NoOpenOverItems)) {
+        if (ImGui::BeginMenu("New")) {
+            if (ImGui::MenuItem("Folder")) {
+                pending_new_kind_      = NK_Folder;
+                new_name_buf_[0]       = 0;
+                new_name_grab_focus_   = true;
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Material Asset (.mat.json5)")) {
+                pending_new_kind_      = NK_Material;
+                new_name_buf_[0]       = 0;
+                new_name_grab_focus_   = true;
+            }
+            if (ImGui::MenuItem("Scene (.json5)")) {
+                pending_new_kind_      = NK_Scene;
+                new_name_buf_[0]       = 0;
+                new_name_grab_focus_   = true;
+            }
+            if (ImGui::MenuItem("Lua Script (.lua)")) {
+                pending_new_kind_      = NK_Script;
+                new_name_buf_[0]       = 0;
+                new_name_grab_focus_   = true;
+            }
+            ImGui::EndMenu();
+        }
+        ImGui::EndPopup();
+    }
+
     ImGui::Separator();
 
     // ---- Folder content listing -------------------------------------------
@@ -216,6 +306,108 @@ void ProjectPanel::draw(EditorApp& app) {
             }
         }
         ImGui::PopID();
+    }
+
+    // ---- New-asset name prompt --------------------------------------------
+    // Opens on the SAME frame the menu item was clicked. The popup ID
+    // is fixed per kind so OpenPopup + BeginPopupModal match up.
+    if (pending_new_kind_ != NK_None) {
+        const char* kind_label =
+            pending_new_kind_ == NK_Folder   ? "New Folder"    :
+            pending_new_kind_ == NK_Material ? "New Material"  :
+            pending_new_kind_ == NK_Scene    ? "New Scene"     :
+            pending_new_kind_ == NK_Script   ? "New Lua Script": "New";
+
+        if (!ImGui::IsPopupOpen("##new_asset_modal")) {
+            ImGui::OpenPopup("##new_asset_modal");
+        }
+        ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+        ImGui::SetNextWindowPos(center, ImGuiCond_Appearing,
+                                ImVec2(0.5f, 0.5f));
+        if (ImGui::BeginPopupModal("##new_asset_modal", nullptr,
+                                   ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextUnformatted(kind_label);
+            ImGui::TextDisabled("Target: %s",
+                normSlash(current.string()).c_str());
+            ImGui::Dummy(ImVec2(0, 6));
+
+            ImGui::TextUnformatted("Name:");
+            ImGui::SetNextItemWidth(320.0f);
+            if (new_name_grab_focus_) {
+                ImGui::SetKeyboardFocusHere();
+                new_name_grab_focus_ = false;
+            }
+            bool submit = ImGui::InputText("##newassetname",
+                new_name_buf_, sizeof(new_name_buf_),
+                ImGuiInputTextFlags_EnterReturnsTrue);
+            ImGui::TextDisabled("Allowed: A-Z a-z 0-9 _ - . (spaces → underscore)");
+
+            ImGui::Dummy(ImVec2(0, 6));
+            std::string sanitized = sanitizeFilename(new_name_buf_);
+            const bool canCreate = !sanitized.empty();
+            ImGui::BeginDisabled(!canCreate);
+            const bool create_clicked =
+                ImGui::Button("Create", ImVec2(96, 0)) ||
+                (submit && canCreate);
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            const bool cancel_clicked = ImGui::Button("Cancel", ImVec2(96, 0));
+
+            if (create_clicked) {
+                std::error_code cec;
+                if (pending_new_kind_ == NK_Folder) {
+                    fs::path target = uniqueTarget(current, sanitized, "");
+                    fs::create_directories(target, cec);
+                    app.bus().emit(cec ? kEvtLogError : kEvtLogInfo,
+                        std::string(cec ? "[New Folder] failed: "
+                                        : "[New Folder] created: ") +
+                        normSlash(target.string()) +
+                        (cec ? " — " + cec.message() : ""));
+                } else if (pending_new_kind_ == NK_Material) {
+                    // createMaterialAsset writes to <project>/assets/materials/
+                    // regardless of current_dir_; matches Tools → New Material.
+                    app.createMaterialAsset(sanitized);
+                } else if (pending_new_kind_ == NK_Scene) {
+                    // Strip a trailing .json5 if the user typed it.
+                    std::string stem = sanitized;
+                    auto trim_ext = [&](const char* ext) {
+                        size_t n = std::strlen(ext);
+                        if (stem.size() > n &&
+                            stem.compare(stem.size()-n, n, ext) == 0)
+                            stem.resize(stem.size() - n);
+                    };
+                    trim_ext(".json5");
+                    fs::path target = uniqueTarget(current, stem, ".json5");
+                    std::ofstream f(target);
+                    if (f) f << kDefaultSceneJson5;
+                    app.bus().emit(f ? kEvtLogInfo : kEvtLogError,
+                        std::string(f ? "[New Scene] created: "
+                                      : "[New Scene] failed: ") +
+                        normSlash(target.string()));
+                } else if (pending_new_kind_ == NK_Script) {
+                    std::string stem = sanitized;
+                    if (stem.size() > 4 &&
+                        stem.compare(stem.size()-4, 4, ".lua") == 0)
+                        stem.resize(stem.size() - 4);
+                    fs::path target = uniqueTarget(current, stem, ".lua");
+                    std::ofstream f(target);
+                    if (f) f << kDefaultScriptLua;
+                    app.bus().emit(f ? kEvtLogInfo : kEvtLogError,
+                        std::string(f ? "[New Script] created: "
+                                      : "[New Script] failed: ") +
+                        normSlash(target.string()));
+                }
+                pending_new_kind_ = NK_None;
+                new_name_buf_[0]  = 0;
+                ImGui::CloseCurrentPopup();
+            } else if (cancel_clicked ||
+                       ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+                pending_new_kind_ = NK_None;
+                new_name_buf_[0]  = 0;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
     }
 
     ImGui::End();

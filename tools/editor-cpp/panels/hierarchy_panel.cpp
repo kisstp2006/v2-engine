@@ -1,4 +1,5 @@
 // STL FIRST.
+#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
@@ -23,7 +24,44 @@ namespace editor {
 
 namespace {
 
-void renderNode(EditorApp& app, obj* node) {
+// Commit the pending inline-rename: applies `panel->rename_buf_` to
+// `panel->renaming_node_` via obj_setname, wrapped in a RenameNodeCommand
+// for undo/redo. Empty / whitespace-only new names are rejected (we keep
+// the old name). Resets the rename state regardless.
+void commitRename(EditorApp& app, HierarchyPanel* panel) {
+    if (!panel || !panel->renaming_node_) return;
+    obj* node = panel->renaming_node_;
+    const char* old_c = obj_name(node);
+    std::string oldName = old_c ? old_c : "";
+    // Trim leading/trailing whitespace from the proposed new name.
+    std::string newName = panel->rename_buf_;
+    while (!newName.empty() &&
+           (newName.front() == ' ' || newName.front() == '\t'))
+        newName.erase(newName.begin());
+    while (!newName.empty() &&
+           (newName.back() == ' ' || newName.back() == '\t'))
+        newName.pop_back();
+
+    if (!newName.empty() && newName != oldName) {
+        obj_setname(node, newName.c_str());
+        app.commands().execute(std::make_unique<RenameNodeCommand>(
+            node, oldName, newName, "Rename"));
+        app.bus().emit(kEvtSceneDirty, true);
+        app.bus().emit(kEvtNodeRenamed, node);
+    }
+    panel->renaming_node_     = nullptr;
+    panel->rename_buf_[0]     = 0;
+    panel->rename_grab_focus_ = false;
+}
+
+void cancelRename(HierarchyPanel* panel) {
+    if (!panel) return;
+    panel->renaming_node_     = nullptr;
+    panel->rename_buf_[0]     = 0;
+    panel->rename_grab_focus_ = false;
+}
+
+void renderNode(EditorApp& app, HierarchyPanel* panel, obj* node) {
     if (!node) return;
 
     const char* name = obj_name(node);
@@ -31,6 +69,7 @@ void renderNode(EditorApp& app, obj* node) {
     const bool  isLeaf  = (childCount == 0);
     const bool  isSelected = app.selection().contains(node);
     const bool  isRoot = (node == app.scene().root());
+    const bool  isRenaming = (panel && panel->renaming_node_ == node);
 
     ImGuiTreeNodeFlags flags =
         ImGuiTreeNodeFlags_OpenOnArrow |
@@ -40,8 +79,45 @@ void renderNode(EditorApp& app, obj* node) {
         (isLeaf ? (ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen)
                 : ImGuiTreeNodeFlags_DefaultOpen);
 
-    bool open = ImGui::TreeNodeEx((void*)node, flags, "%s",
-                                  name ? name : "(unnamed)");
+    // Inline-rename mode: replace the tree-node label with an InputText.
+    // We still call TreeNodeEx() with an empty label so the arrow + the
+    // indent stay correct. The InputText is placed on the same line.
+    bool open;
+    if (isRenaming) {
+        open = ImGui::TreeNodeEx((void*)node, flags, "%s", "");
+        ImGui::SameLine();
+        if (panel->rename_grab_focus_) {
+            ImGui::SetKeyboardFocusHere();
+            panel->rename_grab_focus_ = false;
+        }
+        // Wider InputText so long names fit. -FLT_MIN = take remaining width.
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        bool enter = ImGui::InputText("##rename", panel->rename_buf_,
+            sizeof(panel->rename_buf_),
+            ImGuiInputTextFlags_EnterReturnsTrue |
+            ImGuiInputTextFlags_AutoSelectAll);
+        if (enter) {
+            commitRename(app, panel);
+        } else if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            cancelRename(panel);
+        } else if (ImGui::IsItemDeactivated() &&
+                   !ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
+            // Click-away outside the field → commit.
+            commitRename(app, panel);
+        }
+        // Skip the rest of the per-item handling (selection / drag-drop /
+        // context menu) while in rename mode — the user is busy typing.
+        if (open && !isLeaf) {
+            for (int i = 0; i < childCount; ++i) {
+                renderNode(app, panel, editor_obj_child_at(node, i));
+            }
+            ImGui::TreePop();
+        }
+        return;
+    }
+
+    open = ImGui::TreeNodeEx((void*)node, flags, "%s",
+                             name ? name : "(unnamed)");
     if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
         // Ctrl+click → toggle, plain click → replaces the selection.
         if (ImGui::GetIO().KeyCtrl) {
@@ -99,6 +175,14 @@ void renderNode(EditorApp& app, obj* node) {
         if (!app.selection().contains(node)) {
             app.selection().setPrimary(node);
         }
+        if (!isRoot && ImGui::MenuItem("Rename", "F2")) {
+            panel->renaming_node_ = node;
+            const char* on = obj_name(node);
+            std::strncpy(panel->rename_buf_, on ? on : "",
+                         sizeof(panel->rename_buf_) - 1);
+            panel->rename_buf_[sizeof(panel->rename_buf_) - 1] = 0;
+            panel->rename_grab_focus_ = true;
+        }
         if (ImGui::MenuItem("Save as Prefab...")) {
             app.saveSelectedAsPrefab();
         }
@@ -106,7 +190,7 @@ void renderNode(EditorApp& app, obj* node) {
     }
     if (open && !isLeaf) {
         for (int i = 0; i < childCount; ++i) {
-            renderNode(app, editor_obj_child_at(node, i));
+            renderNode(app, panel, editor_obj_child_at(node, i));
         }
         ImGui::TreePop();
     }
@@ -132,7 +216,25 @@ void HierarchyPanel::draw(EditorApp& app) {
         if (!root) {
             ImGui::TextDisabled("No scene loaded.");
         } else {
-            renderNode(app, root);
+            renderNode(app, this, root);
+        }
+
+        // F2 hotkey — start inline-rename on the primary selection (must be
+        // focused on the Hierarchy panel + not typing in a text field, same
+        // gate as Delete below).
+        if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) &&
+            !ImGui::GetIO().WantTextInput &&
+            !renaming_node_ &&
+            ImGui::IsKeyPressed(ImGuiKey_F2, false)) {
+            obj* prim = app.selection().primary();
+            if (prim && prim != root) {
+                renaming_node_ = prim;
+                const char* on = obj_name(prim);
+                std::strncpy(rename_buf_, on ? on : "",
+                             sizeof(rename_buf_) - 1);
+                rename_buf_[sizeof(rename_buf_) - 1] = 0;
+                rename_grab_focus_ = true;
+            }
         }
 
         // Delete-key handler — only when the Hierarchy panel is focused
@@ -140,6 +242,7 @@ void HierarchyPanel::draw(EditorApp& app) {
         // working in the Inspector/Scene panel).
         if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) &&
             !ImGui::GetIO().WantTextInput &&
+            !renaming_node_ &&
             ImGui::IsKeyPressed(ImGuiKey_Delete, false)) {
             // Copy the selection list because we mutate during deletion.
             std::vector<obj*> sel = app.selection().all();

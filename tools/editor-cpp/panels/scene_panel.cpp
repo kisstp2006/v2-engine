@@ -467,7 +467,13 @@ void ScenePanel::walkShadowPass(obj* node, EditorApp& app) {
     }
 
     shadow_batch_.beginFace(proto, &sm_, cam_.proj, cam_.view);
-    int batched = 0, fellback = 0;
+    int batched = 0, fellback = 0, sh_culled = 0;
+    // Per-face shadow-frustum cull. shadowmap_light updated sm_.shadow_frustum
+    // for the CURRENT cubemap face before walkShadowPass was called, so the
+    // sphere-vs-frustum test correctly skips meshes outside this face's view.
+    // For 12 meshes x 6 faces, expect ~50-65% culled per face (each face
+    // only covers ~1/6 of a sphere).
+    const frustum sh_frustum = sm_.shadow_frustum;
     for (obj* m : meshNodes_) {
         auto pcIt = pathCache_.find(m);
         if (pcIt == pathCache_.end()) continue;
@@ -476,6 +482,21 @@ void ScenePanel::walkShadowPass(obj* node, EditorApp& app) {
 
         mat44 pivot;
         editor_mesh_renderer_compose_pivot(m, pivot);
+
+        // Frustum cull. Same gates as the main pass: skinned + cull_mode=1
+        // bypass cull (rest-pose bsphere is unreliable; sky/HUD must always
+        // cast). `frustum_cull_` panel-toggle controls whether ANY cull runs.
+        bool can_cull_sh = frustum_cull_ &&
+                           editor_mesh_renderer_cull_mode(m) == 0 &&
+                           !(mcIt->second.flags & MODEL_GLTF_SKINNED) &&
+                           mcIt->second.num_joints == 0;
+        if (can_cull_sh) {
+            sphere bs = model_bsphere(mcIt->second, pivot);
+            if (!frustum_test_sphere(sh_frustum, bs)) {
+                ++sh_culled;
+                continue;
+            }
+        }
 
         if (ShadowBatch::isCompatible(&mcIt->second)) {
             shadow_batch_.draw(&mcIt->second, pivot);
@@ -503,8 +524,9 @@ void ScenePanel::walkShadowPass(obj* node, EditorApp& app) {
     // Per-face counters — updated each face but only the LAST one ends
     // up in the EMA / counter slot. For 6 faces × identical mesh set,
     // they all see the same numbers, so this is fine for diagnostics.
-    editor_profile_set_counter("Editor.Shadow.BatchPerFace",    (double)batched);
-    editor_profile_set_counter("Editor.Shadow.FallbackPerFace", (double)fellback);
+    editor_profile_set_counter("Editor.Shadow.BatchPerFace",     (double)batched);
+    editor_profile_set_counter("Editor.Shadow.FallbackPerFace",  (double)fellback);
+    editor_profile_set_counter("Editor.Shadow.CulledPerFace",    (double)sh_culled);
 }
 
 void ScenePanel::collectLights(obj* node, std::vector<light_t>& out) {
@@ -565,14 +587,109 @@ void ScenePanel::walkAndRender(obj* node, EditorApp& app,
                                const std::vector<light_t>& lights,
                                obj* fogNode, skybox_t* sky) {
     // Flat-list path: linear iteration over meshNodes_ instead of the
-    // recursive tree walk. The WalkRecurse scope is gone — its cost
-    // (~2.8 ms) was the child_count+child_at chain on ~42 nodes per frame.
-    // The `node` parameter is kept for ABI but unused on this path.
+    // recursive tree walk.
     (void)node;
     EDITOR_PROFILE("Editor.Scene.WalkRecurse");
+
+    // Camera-frustum cull. The motor's model_render does its own internal
+    // model_is_visible test, but only AFTER allocating instancing buffers
+    // and running model_analyseshader — too late to save the editor-side
+    // prep work (path resolve, model_light, model_fog, model_skybox,
+    // material override apply, pivot compose). We do the cull HERE and
+    // skip the entire setup for invisible meshes.
+    mat44 projview; multiply44x2(projview, cam_.proj, cam_.view);
+    frustum cam_frustum = frustum_build(projview);
+
+    // Cross-mesh transparency sorting. The motor's transparent renderstate
+    // enables blend BUT doesn't disable depth-write — so a transparent
+    // mesh drawn FIRST writes depth at every fragment (including the
+    // discarded/alpha-cutout pixels), occluding opaque meshes drawn AFTER
+    // it (e.g. a wire-mesh trash basket would cut out the floor visible
+    // through its holes). Fix: render opaque first, then transparent
+    // back-to-front by camera distance.
+    struct TransparentEntry { obj* node; float dist2; };
+    std::vector<TransparentEntry> transparents;
+    transparents.reserve(meshNodes_.size() / 4);
+
+    int rendered = 0, culled = 0;
     for (obj* m : meshNodes_) {
+        // Resolve the model_t pointer via the same path/modelCache_ chain
+        // renderMeshNode uses — we need the bounding sphere BEFORE the
+        // full setup. Cheap: pathCache hit + modelCache hit.
+        auto pcIt = pathCache_.find(m);
+        if (pcIt == pathCache_.end()) {
+            // First sighting → renderMeshNode will populate the cache. Don't
+            // cull yet; the prep work will run.
+            renderMeshNode(m, app, lights, fogNode, sky);
+            ++rendered;
+            continue;
+        }
+        auto mcIt = modelCache_.find(pcIt->second.abs);
+        if (mcIt == modelCache_.end()) {
+            renderMeshNode(m, app, lights, fogNode, sky);
+            ++rendered;
+            continue;
+        }
+
+        // Cull-mode gate:
+        //   - cull_mode = 1 (Always Render) → never cull this mesh.
+        //   - skinned model → never cull (rest-pose bsphere doesn't reflect
+        //     animated bone deformation; the mesh's actual extent can be
+        //     2-3 m beyond the static sphere).
+        //   - panel toolbar `frustum_cull_` toggle OFF → bypass for debug.
+        bool can_cull = frustum_cull_ &&
+                        editor_mesh_renderer_cull_mode(m) == 0 &&
+                        !(mcIt->second.flags & MODEL_GLTF_SKINNED) &&
+                        mcIt->second.num_joints == 0;
+        if (can_cull) {
+            mat44 cull_pivot;
+            editor_mesh_renderer_compose_pivot(m, cull_pivot);
+            sphere bs = model_bsphere(mcIt->second, cull_pivot);
+            if (!frustum_test_sphere(cam_frustum, bs)) {
+                ++culled;
+                continue;
+            }
+        }
+
+        // Defer transparent meshes to a sorted second pass. We use the
+        // motor's `model_has_transparency` (true if any submesh has
+        // albedo.color.a < 1 OR the albedo texture has a non-trivial
+        // alpha channel). Distance is squared (sorting key only) from
+        // the mesh's pivot to the camera position.
+        if (model_has_transparency(&mcIt->second)) {
+            mat44 dist_pivot;
+            editor_mesh_renderer_compose_pivot(m, dist_pivot);
+            vec3 cam_pos = pos44(cam_.view);
+            vec3 mesh_pos = vec3(dist_pivot[12], dist_pivot[13], dist_pivot[14]);
+            vec3 d = sub3(mesh_pos, cam_pos);
+            float d2 = d.x*d.x + d.y*d.y + d.z*d.z;
+            transparents.push_back({m, d2});
+            continue;
+        }
+
         renderMeshNode(m, app, lights, fogNode, sky);
+        ++rendered;
     }
+
+    // Second pass: transparents, back-to-front (far to near). For correct
+    // alpha blending, the GL pipeline needs the most-distant transparent
+    // surface drawn FIRST so closer ones blend over it. Within a single
+    // model the motor's model_draw_call already z-sorts submeshes; this
+    // sort handles the cross-model case.
+    if (!transparents.empty()) {
+        std::sort(transparents.begin(), transparents.end(),
+            [](const TransparentEntry& a, const TransparentEntry& b) {
+                return a.dist2 > b.dist2;
+            });
+        for (const auto& t : transparents) {
+            renderMeshNode(t.node, app, lights, fogNode, sky);
+            ++rendered;
+        }
+    }
+
+    editor_profile_set_counter("Editor.Scene.MeshesRendered",     (double)rendered);
+    editor_profile_set_counter("Editor.Scene.MeshesCulled",       (double)culled);
+    editor_profile_set_counter("Editor.Scene.MeshesTransparent",  (double)transparents.size());
 }
 
 void ScenePanel::renderScene(int w, int h, bool inputAllowed, EditorApp& app) {
@@ -733,6 +850,11 @@ void ScenePanel::draw(EditorApp& app) {
         ImGui::End();
         return;
     }
+
+    // Toolbar row — debug toggles. Kept tight so the FBO area stays large.
+    ImGui::Checkbox("Frustum Cull", &frustum_cull_);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(uncheck to disable cull for debugging)");
 
     ImVec2 avail = ImGui::GetContentRegionAvail();
     int w = (int)avail.x;

@@ -1,6 +1,11 @@
 // STL FIRST.
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -14,6 +19,27 @@
 #include "../core/events.h"
 
 namespace editor {
+
+namespace {
+// Read whole file → string. Empty string on error (treated as "no snapshot",
+// undo/redo becomes a no-op rather than truncating the file to 0 bytes).
+std::string readFileWhole(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f.is_open()) return {};
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    return ss.str();
+}
+bool writeFileWhole(const std::string& path, const std::string& contents) {
+    std::error_code ec;
+    std::filesystem::create_directories(
+        std::filesystem::path(path).parent_path(), ec);
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    if (!f.is_open()) return false;
+    f.write(contents.data(), (std::streamsize)contents.size());
+    return f.good();
+}
+}  // namespace
 
 // ---- ObjectStateCommand ---------------------------------------------------
 
@@ -180,6 +206,119 @@ void CommandStack::redo() {
 void CommandStack::clear() {
     undo_.clear();
     redo_.clear();
+}
+
+// ---- AssetStateCommand ----------------------------------------------------
+
+AssetStateCommand::AssetStateCommand(std::string absPath,
+                                     std::string before,
+                                     std::string after,
+                                     std::string name)
+    : absPath_(std::move(absPath)),
+      before_(std::move(before)),
+      after_(std::move(after)),
+      name_(std::move(name)) {}
+
+void AssetStateCommand::writeContents_(const std::string& contents) {
+    if (absPath_.empty() || contents.empty()) return;
+    writeFileWhole(absPath_, contents);
+}
+
+void AssetStateCommand::undo() { writeContents_(before_); }
+void AssetStateCommand::redo() { writeContents_(after_);  }
+
+// ---- CommandStack per-target lookup ---------------------------------------
+
+bool CommandStack::canUndoForObject(obj* o) const {
+    if (!o) return false;
+    for (auto it = undo_.rbegin(); it != undo_.rend(); ++it) {
+        if ((*it)->affectsObject(o)) return true;
+    }
+    return false;
+}
+
+bool CommandStack::undoForObject(obj* o) {
+    if (!o) return false;
+    for (size_t i = undo_.size(); i-- > 0; ) {
+        if (undo_[i]->affectsObject(o)) {
+            auto cmd = std::move(undo_[i]);
+            undo_.erase(undo_.begin() + (std::ptrdiff_t)i);
+            cmd->undo();
+            redo_.push_back(std::move(cmd));
+            if (bus_) bus_->emit(kEvtSceneDirty, true);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool CommandStack::canRedoForObject(obj* o) const {
+    if (!o) return false;
+    for (auto it = redo_.rbegin(); it != redo_.rend(); ++it) {
+        if ((*it)->affectsObject(o)) return true;
+    }
+    return false;
+}
+
+bool CommandStack::redoForObject(obj* o) {
+    if (!o) return false;
+    for (size_t i = redo_.size(); i-- > 0; ) {
+        if (redo_[i]->affectsObject(o)) {
+            auto cmd = std::move(redo_[i]);
+            redo_.erase(redo_.begin() + (std::ptrdiff_t)i);
+            cmd->redo();
+            undo_.push_back(std::move(cmd));
+            if (bus_) bus_->emit(kEvtSceneDirty, true);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool CommandStack::canUndoForAsset(const std::string& p) const {
+    if (p.empty()) return false;
+    for (auto it = undo_.rbegin(); it != undo_.rend(); ++it) {
+        if ((*it)->affectsAsset(p)) return true;
+    }
+    return false;
+}
+
+bool CommandStack::undoForAsset(const std::string& p) {
+    if (p.empty()) return false;
+    for (size_t i = undo_.size(); i-- > 0; ) {
+        if (undo_[i]->affectsAsset(p)) {
+            auto cmd = std::move(undo_[i]);
+            undo_.erase(undo_.begin() + (std::ptrdiff_t)i);
+            cmd->undo();
+            redo_.push_back(std::move(cmd));
+            if (bus_) bus_->emit(kEvtSceneDirty, true);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool CommandStack::canRedoForAsset(const std::string& p) const {
+    if (p.empty()) return false;
+    for (auto it = redo_.rbegin(); it != redo_.rend(); ++it) {
+        if ((*it)->affectsAsset(p)) return true;
+    }
+    return false;
+}
+
+bool CommandStack::redoForAsset(const std::string& p) {
+    if (p.empty()) return false;
+    for (size_t i = redo_.size(); i-- > 0; ) {
+        if (redo_[i]->affectsAsset(p)) {
+            auto cmd = std::move(redo_[i]);
+            redo_.erase(redo_.begin() + (std::ptrdiff_t)i);
+            cmd->redo();
+            undo_.push_back(std::move(cmd));
+            if (bus_) bus_->emit(kEvtSceneDirty, true);
+            return true;
+        }
+    }
+    return false;
 }
 
 }  // namespace editor

@@ -70,6 +70,7 @@ void ProjectPanel::draw(EditorApp& app) {
     if (ImGui::SmallButton("..")) {
         if (!atRoot) {
             current_dir_ = current.parent_path().string();
+            select_cooldown_until_ = ImGui::GetTime() + 0.25;
         }
     }
     ImGui::SameLine();
@@ -91,6 +92,7 @@ void ProjectPanel::draw(EditorApp& app) {
             ImGui::PushID((int)i);
             if (ImGui::SmallButton(segs[i].c_str())) {
                 current_dir_ = acc.string();
+                select_cooldown_until_ = ImGui::GetTime() + 0.25;
             }
             ImGui::PopID();
             if (i + 1 < segs.size()) {
@@ -152,6 +154,11 @@ void ProjectPanel::draw(EditorApp& app) {
         if (ImGui::IsItemHovered() &&
             ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
             current_dir_ = full;
+            // Suppress the next ~250ms of asset clicks. The double-click's
+            // second release event will land on the NEW listing's content
+            // and would otherwise auto-select whatever asset happens to be
+            // under the cursor.
+            select_cooldown_until_ = ImGui::GetTime() + 0.25;
         }
         ImGui::PopID();
     }
@@ -188,9 +195,13 @@ void ProjectPanel::draw(EditorApp& app) {
         // 1-click → asset selection (Inspector preview).
         // Release-on-hover without crossing the drag threshold, so that
         // starting a drag-and-drop on the item does NOT re-select it.
+        // Also gated by the dir-change cooldown so a double-click on the
+        // parent directory doesn't accidentally select the asset that
+        // landed under the cursor in the new listing.
         if (ImGui::IsItemHovered()
             && ImGui::IsMouseReleased(ImGuiMouseButton_Left)
-            && !ImGui::IsMouseDragPastThreshold(ImGuiMouseButton_Left)) {
+            && !ImGui::IsMouseDragPastThreshold(ImGuiMouseButton_Left)
+            && ImGui::GetTime() >= select_cooldown_until_) {
             app.selection().setSelectedAsset(full);
         }
         // Double-click → FileTypeRegistry dispatch.

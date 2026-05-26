@@ -70,6 +70,9 @@ public:
     // New PostFXStack node — scene-wide singleton (post-process pipeline).
     obj* createPostFXStack(obj* parent = nullptr);
 
+    // New ShadowSettings node — scene-wide singleton (shadowmap_t globals).
+    obj* createShadowSettings(obj* parent = nullptr);
+
     // New TextRenderer node — screen-space text overlay.
     obj* createTextRenderer(const char* text = "", obj* parent = nullptr);
 

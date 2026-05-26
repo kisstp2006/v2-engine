@@ -1,4 +1,4 @@
-/* Mon05252026: Auto-generated file. Do not edit */ 
+/* Tue05262026: Auto-generated file. Do not edit */ 
 typedef void (*GLADapiproc)(void);
 typedef GLADapiproc (*GLADloadfunc)(const char *name);
 typedef GLADapiproc (*GLADuserptrloadfunc)(void *userptr, const char *name);
@@ -4482,7 +4482,7 @@ enum MATERIAL_ENUMS {
     MAX_CHANNELS_PER_MATERIAL
 };
 typedef struct material_layer_t {
-    char   texname[32];
+    char   texname[128];
     float  value;
     float  value2;
     colormap_t map;
@@ -4911,6 +4911,8 @@ enum { OBJTYPE_light_t = OBJTYPE_light }; typedef struct { unsigned static_asser
  light_t light();
  void    ui_light(light_t *l);
  void    ui_lights(unsigned num_lights, light_t *lights);
+ void    ddraw_light(light_t *l);
+ void    ddraw_lights(unsigned num_lights, light_t *lights);
 typedef struct shadowmap_t {
     mat44 V;
     mat44 PV;

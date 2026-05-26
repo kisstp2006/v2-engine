@@ -15,9 +15,13 @@
 #undef obj
 #endif
 
+#include <fstream>
+#include <sstream>
+
 #include "asset_preview.h"
 #include "../app/editor_app.h"
 #include "../app/file_type_registry.h"
+#include "../commands/command.h"
 #include "../core/asset_path.h"
 #include "../core/event_bus.h"
 #include "../core/events.h"
@@ -215,7 +219,35 @@ void drawAssetPreview(EditorApp& app, const std::string& absPath) {
             ImGui::TextDisabled("Check the file with a text editor.");
         } else {
             if (ImGui::Button("Save Changes")) {
+                // Snapshot the file BEFORE the write so we have an undo target.
+                std::string before;
+                {
+                    std::ifstream f(absPath, std::ios::binary);
+                    if (f.is_open()) {
+                        std::ostringstream ss;
+                        ss << f.rdbuf();
+                        before = ss.str();
+                    }
+                }
                 if (material_asset_io::writeFile(absPath, entry->mat)) {
+                    // Read the new contents for the redo snapshot.
+                    std::string after;
+                    {
+                        std::ifstream f(absPath, std::ios::binary);
+                        if (f.is_open()) {
+                            std::ostringstream ss;
+                            ss << f.rdbuf();
+                            after = ss.str();
+                        }
+                    }
+                    // Push an undoable record. Inspector arrows will scrub
+                    // this asset's history; global Ctrl+Z also works.
+                    if (!before.empty() && !after.empty() && before != after) {
+                        app.commands().execute(
+                            std::make_unique<AssetStateCommand>(
+                                absPath, std::move(before), std::move(after),
+                                "Material Save"));
+                    }
                     // Bump cached mtime so next frame's mtime-poll doesn't
                     // reload (which would discard mid-edit state).
                     std::error_code ec;

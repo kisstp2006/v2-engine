@@ -49,10 +49,10 @@ bool writePngFromBytes(const uint8_t* bytes, int len, const fs::path& outPath) {
 
 // Extract one cgltf_image to disk. Returns the file-name (relative to the
 // project's `assets/textures/` root) that went into the resulting file, or
-// "" on failure. CRITICAL: must fit `material_layer_t.texname` = char[32]
-// (engine limit). We therefore: (a) skip per-model subfolders, (b) write
-// straight into `assets/textures/`, (c) use 3-letter channel suffixes —
-// see the caller for the naming scheme.
+// "" on failure. The stored path must fit `material_layer_t.texname` (was
+// char[32], now char[128]). We still: (a) skip per-model subfolders,
+// (b) write straight into `assets/textures/`, (c) use 3-letter channel
+// suffixes — so the result remains compact for hand-readable scene files.
 //
 // Three cases handled (mirrors gltf_load_image at render_model_gltf.h:60-75):
 //   (1) image has buffer_view (embedded GLB-binary, or a data:URI that
@@ -85,8 +85,9 @@ std::string extractImage(cgltf_image* img,
             }
             return "";
         }
-        // Return just the filename (no `assets/textures/` prefix) — keeps the
-        // string short enough for material_layer_t.texname's 32-byte limit.
+        // Return just the filename (no `assets/textures/` prefix) — kept
+        // compact for hand-readable scene files (the texname buffer is
+        // 128 bytes since M16+, so it has more headroom than before).
         // load-time resolves the implicit `assets/textures/` prefix.
         return outBaseName + ".png";
     }
@@ -164,10 +165,10 @@ ExtractResult extractGltfAssets(const std::string& gltfAbsPath,
 
     fs::path gltfPath(gltfAbsPath);
     std::string gltfBase = sanitize(gltfPath.stem().string(), "model");
-    // No per-glTF subfolder — `material_layer_t.texname` is char[32], so the
-    // stored path can't include `assets/textures/<basename>/` (16 + N + 1 +
-    // filename + .png easily blows the limit). We dump straight into
-    // `assets/textures/` and load-time auto-prefixes that root.
+    // No per-glTF subfolder — keeps scene files tidy and short. The texname
+    // buffer is now 128 bytes (was 32), so theoretical headroom is generous,
+    // but flat-layout convention stays. load-time auto-prefixes the
+    // `assets/textures/` root when texname has no slash.
     fs::path texDir = fs::path(projectRoot) / "assets" / "textures";
     fs::path matDir = fs::path(projectRoot) / "assets" / "materials";
 

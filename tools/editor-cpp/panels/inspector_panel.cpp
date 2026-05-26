@@ -17,6 +17,53 @@ void InspectorPanel::draw(EditorApp& app) {
         // Asset-preview mode: if there is no primary node BUT there is a selected asset
         // (1-click from the Project panel), the Inspector shows the asset-info.
         const std::string& assetPath = app.selection().selectedAsset();
+
+        // Per-selection undo / redo arrows. Operate on the CURRENT primary
+        // node, or — if no node is selected — on the selected asset. The
+        // arrows scan the command stack from the top down for the most
+        // recent match; arrows are disabled when nothing matches.
+        {
+            const bool nodeMode  = (o != nullptr);
+            const bool assetMode = (!nodeMode && !assetPath.empty());
+
+            const bool canU = nodeMode  ? app.commands().canUndoForObject(o)
+                            : assetMode ? app.commands().canUndoForAsset(assetPath)
+                            : false;
+            const bool canR = nodeMode  ? app.commands().canRedoForObject(o)
+                            : assetMode ? app.commands().canRedoForAsset(assetPath)
+                            : false;
+
+            if (!canU) ImGui::BeginDisabled();
+            if (ImGui::ArrowButton("##undo_sel", ImGuiDir_Left)) {
+                if (nodeMode)  app.commands().undoForObject(o);
+                else if (assetMode) app.commands().undoForAsset(assetPath);
+            }
+            if (!canU) ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip(canU
+                    ? "Undo last change to this selection"
+                    : "No recent change for this selection");
+            }
+
+            ImGui::SameLine();
+
+            if (!canR) ImGui::BeginDisabled();
+            if (ImGui::ArrowButton("##redo_sel", ImGuiDir_Right)) {
+                if (nodeMode)  app.commands().redoForObject(o);
+                else if (assetMode) app.commands().redoForAsset(assetPath);
+            }
+            if (!canR) ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip(canR
+                    ? "Redo next change to this selection"
+                    : "No redo for this selection");
+            }
+
+            ImGui::SameLine();
+            ImGui::TextDisabled("|");
+            ImGui::SameLine();
+        }
+
         if (!o && !assetPath.empty()) {
             drawAssetPreview(app, assetPath);
         } else if (!o) {

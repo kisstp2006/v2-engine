@@ -19,6 +19,13 @@ public:
     virtual void undo() = 0;
     virtual void redo() = 0;
     virtual const char* name() const = 0;
+
+    // Per-selection undo/redo support. The Inspector's `◀ ▶` arrows ask the
+    // CommandStack to scan from the top down and find the most recent
+    // command that touches the currently-selected node OR asset.
+    // Default = unscoped (won't be found by per-target lookup).
+    virtual bool affectsObject(obj* /*o*/) const { return false; }
+    virtual bool affectsAsset(const std::string& /*absPath*/) const { return false; }
 };
 
 // Snapshot-based state-command. The complete reflected state of the `target`
@@ -31,6 +38,7 @@ public:
     void undo() override;
     void redo() override;
     const char* name() const override { return name_.c_str(); }
+    bool affectsObject(obj* o) const override { return o && o == target_; }
 
     static std::string snapshot(obj* o);  // helper
 
@@ -54,6 +62,7 @@ public:
     void undo() override;
     void redo() override;
     const char* name() const override { return name_.c_str(); }
+    bool affectsObject(obj* o) const override { return o && (o == node_ || o == parent_); }
 
 private:
     obj*        parent_;
@@ -74,6 +83,7 @@ public:
     void undo() override;
     void redo() override;
     const char* name() const override { return name_.c_str(); }
+    bool affectsObject(obj* o) const override { return o && (o == node_ || o == parent_); }
 
 private:
     obj*        parent_;
@@ -94,6 +104,9 @@ public:
     void undo() override;
     void redo() override;
     const char* name() const override { return name_.c_str(); }
+    bool affectsObject(obj* o) const override {
+        return o && (o == node_ || o == oldParent_ || o == newParent_);
+    }
 
 private:
     obj*        node_;
@@ -113,6 +126,11 @@ public:
     void undo() override;
     void redo() override;
     const char* name() const override { return name_.c_str(); }
+    bool affectsObject(obj* o) const override {
+        if (!o) return false;
+        for (obj* t : targets_) if (t == o) return true;
+        return false;
+    }
 
     // snapshotAll(nodes) — obj_saveini for every node.
     static std::vector<std::string> snapshotAll(const std::vector<obj*>& nodes);
@@ -122,6 +140,28 @@ private:
     std::vector<std::string> befores_;
     std::vector<std::string> afters_;
     std::string              name_;
+};
+
+// Asset-state command — snapshot-based diff of a file's CONTENTS. Used for
+// `.mat.json5` Save (asset_preview.cpp) so material edits become undoable.
+// undo / redo writes `before_` / `after_` back to disk; the editor's asset
+// caches mtime-poll and reload on next access (no explicit invalidation).
+class AssetStateCommand : public Command {
+public:
+    AssetStateCommand(std::string absPath, std::string before, std::string after,
+                      std::string name);
+    void undo() override;
+    void redo() override;
+    const char* name() const override { return name_.c_str(); }
+    bool affectsAsset(const std::string& p) const override { return p == absPath_; }
+
+private:
+    void writeContents_(const std::string& contents);
+
+    std::string absPath_;
+    std::string before_;
+    std::string after_;
+    std::string name_;
 };
 
 class EventBus;
@@ -142,6 +182,26 @@ public:
     bool canUndo() const { return !undo_.empty(); }
     bool canRedo() const { return !redo_.empty(); }
     void clear();
+
+    // Per-target undo/redo — scan from the TOP of the corresponding stack,
+    // find the most recent command that touches the given target, pop it
+    // out of the stack (rest of the stack is preserved in order), and run
+    // its undo/redo. Returns true on action.
+    //
+    // Note: this can drift the per-target state away from the global
+    // timeline (a later command on a different target still sits in undo_
+    // after we pull this one out). That's intentional — it's a "scrub
+    // back through THIS object's recent changes" feature, not a global
+    // history navigator. Global Ctrl+Z still walks the full stack in order.
+    bool canUndoForObject(obj* o) const;
+    bool undoForObject(obj* o);
+    bool canRedoForObject(obj* o) const;
+    bool redoForObject(obj* o);
+
+    bool canUndoForAsset(const std::string& absPath) const;
+    bool undoForAsset(const std::string& absPath);
+    bool canRedoForAsset(const std::string& absPath) const;
+    bool redoForAsset(const std::string& absPath);
 
 private:
     std::vector<std::unique_ptr<Command>> undo_;

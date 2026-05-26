@@ -17,7 +17,7 @@ enum MATERIAL_ENUMS {
 };
 
 typedef struct material_layer_t {
-    char   texname[32];
+    char   texname[128];
     float  value;
     float  value2;
     colormap_t map;

@@ -42,9 +42,11 @@ bool drawTextureChannel(material_t* m,
 
     material_layer_t* L = &m->layer[channelIdx];
 
-    // InputText on the texname buffer (texname is `char[32]` — see
+    // InputText on the texname buffer (texname is `char[128]` — see
     // material_layer_t in render_material.h). EnterReturnsTrue lets the user
-    // commit a manually-typed path; auto-load happens then.
+    // commit a manually-typed path; auto-load happens then. The InputText
+    // uses sizeof(L->texname), so any future change to the field size
+    // propagates automatically without touching this file.
     bool changed = false;
     ImGui::SetNextItemWidth(-1);
     if (ImGui::InputText("##texpath", L->texname, sizeof(L->texname),
@@ -62,11 +64,10 @@ bool drawTextureChannel(material_t* m,
             if (absPath && *absPath) {
                 std::string rel = asset_path::toProjectRelative(
                     absPath, projectRoot);
-                // texname is char[32] (engine limit). If the file lives in
+                // texname is char[128] (engine limit). If the file lives in
                 // `assets/textures/`, store the bare filename — load-time
                 // re-prefixes that root. Only fall back to project-relative
-                // for files outside the conventional location, and warn if
-                // the result still overflows.
+                // for files outside the conventional location.
                 static const char kTexRoot[] = "assets/textures/";
                 if (rel.size() > sizeof(kTexRoot) - 1 &&
                     rel.compare(0, sizeof(kTexRoot) - 1, kTexRoot) == 0 &&

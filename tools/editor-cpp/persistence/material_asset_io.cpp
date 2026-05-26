@@ -211,10 +211,11 @@ bool loadMaterial(const std::string& path,
                     // `texname` may be either a project-relative path
                     // ("assets/textures/foo.png") OR a bare filename
                     // ("foo.png" — common with the glTF-extractor, since
-                    // material_layer_t.texname is char[32] and the bare
-                    // filename is the only thing that reliably fits).
+                    // the extractor flattens into `assets/textures/`).
                     // Bare filenames implicitly resolve to
-                    // <project>/assets/textures/<filename>.
+                    // <project>/assets/textures/<filename>. The buffer
+                    // is char[128] since M16+; older scenes still load
+                    // fine since the JSON5 reader is length-agnostic.
                     std::string resolved;
                     if (strchr(texname, '/') || strchr(texname, '\\')) {
                         resolved = texname;     // explicit project-rel path

@@ -9,6 +9,7 @@
 #include "../core/event_bus.h"
 #include "../core/selection_service.h"
 #include "../core/task_queue.h"
+#include "../scene/scene_query.h"
 #include "../scene/scene_service.h"
 #include "../commands/command.h"
 #include "../runtime/play_mode.h"
@@ -106,6 +107,7 @@ public:
     CommandStack&     commands()  { return commands_; }
     PlayMode&         play()      { return play_; }
     AssetManager&     assets()    { return assets_; }
+    SceneQuery&       sceneQuery(){ return sceneQuery_; }
     ScriptHost&       scriptHost();                      /* lazy-init */
     LuaRepl&          luaRepl();                          /* lazy-init */
     CookRunner&       cookRunner();                       /* lazy-init */
@@ -197,6 +199,9 @@ private:
     // AssetManager — Refaktor F1. Constructed AFTER bus_ + projectPath_; the
     // header tag-order matters because we hand both to its ctor.
     AssetManager     assets_{bus_, projectPath_};
+    // SceneQuery — Refaktor F3. Centralized scene-walk + singleton cache,
+    // shared across all viewport panels.
+    SceneQuery       sceneQuery_{bus_};
     CommandStack     commands_;
     PlayMode         play_;
     std::unique_ptr<ScriptHost>  scriptHost_;

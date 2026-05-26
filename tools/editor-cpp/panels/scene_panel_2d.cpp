@@ -15,6 +15,7 @@
 #include <cimguizmo/cimguizmo.h>
 
 #include "scene_panel_2d.h"
+#include "../render/framebuffer.h"
 #include "../app/editor_app.h"
 #include "../app/panel_registry.h"
 #include "../commands/command.h"
@@ -92,18 +93,11 @@ Scene2DPanel::Scene2DPanel() : Panel("scene2d", "Scene 2D") {
 }
 
 Scene2DPanel::~Scene2DPanel() {
-    if (fbo_.id) {
-        fbo_destroy(fbo_);
-        fbo_ = fbo_t{};
-    }
+    framebuffer_destroy(fbo_, width_, height_);
 }
 
 void Scene2DPanel::ensureFbo(int w, int h) {
-    if (w == width_ && h == height_ && fbo_.id) return;
-    if (fbo_.id) fbo_destroy(fbo_);
-    fbo_ = fbo((unsigned)w, (unsigned)h, 0, 0);
-    width_  = w;
-    height_ = h;
+    framebuffer_ensure(fbo_, width_, height_, w, h);
 }
 
 void Scene2DPanel::renderSpriteNode(obj* node, EditorApp& app) {

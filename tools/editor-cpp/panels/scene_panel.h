@@ -26,7 +26,6 @@ public:
 private:
     void ensureFbo(int w, int h);
     void renderScene(int w, int h, bool inputAllowed, EditorApp& app);
-    void collectLights(obj* node, std::vector<light_t>& out);
     void walkAndRender(obj* node, EditorApp& app,
                        const std::vector<light_t>& lights,
                        obj* fogNode, skybox_t* sky);
@@ -69,17 +68,13 @@ private:
     // app.assets().absPathFor(node, relPath) does the same work as the old
     // pathCache_ + asset_path::toAbsolute pair.
 
-    // Flat scene-node lists — rebuilt only on tree mutation, iterated
-    // every frame instead of walking the obj-tree recursively. With ~42
-    // total nodes the recursive walk was ~2.8 ms / frame (child_count +
-    // child_at per node); a flat std::vector iteration drops that to
-    // single-digit μs. Invalidated by kEvtSceneDirty + kEvtSceneReplaced.
-    bool                busWired_         = false;
-    bool                flatListsDirty_   = true;
-    std::vector<obj*>   meshNodes_;
-    std::vector<obj*>   lightNodes_;
+    // Flat node lists + scene-mutation subscription moved to
+    // editor::SceneQuery (Refaktor F3). One shared instance lives in
+    // EditorApp::sceneQuery_; both Scene and Game panels read from it.
+    // The only bus subscription that remains here is for
+    // `overridesApplied_` — see wireBusIfNeeded_() below.
+    bool busWired_ = false;
     void wireBusIfNeeded_(EditorApp& app);
-    void rebuildFlatLists_(obj* root);
 
     // MaterialOverrides apply cache. The apply does ~1.5 KB material_t
     // struct copy + bit-mask overlay PER MESH PER FRAME — ~1.5 ms total

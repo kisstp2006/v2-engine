@@ -15,6 +15,7 @@
 #include <cimguizmo/cimguizmo.h>
 
 #include "scene_panel.h"
+#include "../render/framebuffer.h"
 #include "../app/editor_app.h"
 #include "../app/panel_registry.h"
 #include "../commands/command.h"
@@ -35,10 +36,7 @@ ScenePanel::ScenePanel() : Panel("scene", "Scene") {
 }
 
 ScenePanel::~ScenePanel() {
-    if (fbo_.id) {
-        fbo_destroy(fbo_);
-        fbo_ = fbo_t{};
-    }
+    framebuffer_destroy(fbo_, width_, height_);
     if (sm_init_) {
         shadowmap_destroy(&sm_);
         sm_init_ = false;
@@ -47,11 +45,7 @@ ScenePanel::~ScenePanel() {
 }
 
 void ScenePanel::ensureFbo(int w, int h) {
-    if (w == width_ && h == height_ && fbo_.id) return;
-    if (fbo_.id) fbo_destroy(fbo_);
-    fbo_ = fbo((unsigned)w, (unsigned)h, 0, 0);
-    width_  = w;
-    height_ = h;
+    framebuffer_ensure(fbo_, width_, height_, w, h);
 }
 
 namespace {
@@ -100,39 +94,9 @@ void editorFreefly(camera_t* cam, bool blocked) {
 
 }  // namespace
 
-// Depth-first lookup of the first FogSettings in the scene (NULL if none).
-static obj* findFogSettings(obj* node) {
-    if (!node) return nullptr;
-    if (editor_obj_is_fog_settings(node)) return node;
-    int n = editor_obj_child_count(node);
-    for (int i = 0; i < n; ++i) {
-        obj* r = findFogSettings(editor_obj_child_at(node, i));
-        if (r) return r;
-    }
-    return nullptr;
-}
-
-static obj* findSkyboxNode(obj* node) {
-    if (!node) return nullptr;
-    if (editor_obj_is_skybox(node)) return node;
-    int n = editor_obj_child_count(node);
-    for (int i = 0; i < n; ++i) {
-        obj* r = findSkyboxNode(editor_obj_child_at(node, i));
-        if (r) return r;
-    }
-    return nullptr;
-}
-
-static obj* findShadowSettings(obj* node) {
-    if (!node) return nullptr;
-    if (editor_obj_is_shadow_settings(node)) return node;
-    int n = editor_obj_child_count(node);
-    for (int i = 0; i < n; ++i) {
-        obj* r = findShadowSettings(editor_obj_child_at(node, i));
-        if (r) return r;
-    }
-    return nullptr;
-}
+// Singleton-node lookups (FogSettings, Skybox, ShadowSettings, etc.) moved
+// to editor::SceneQuery (Refaktor F3) — one cached DFS per scene mutation
+// instead of three separate walks per frame.
 
 static obj* findPostFXStack(obj* node) {
     if (!node) return nullptr;
@@ -231,7 +195,7 @@ static void drawText3DOverlays_scene(obj* root) {
 }
 
 skybox_t* ScenePanel::resolveSkybox(EditorApp& app) {
-    obj* skyNode = findSkyboxNode(app.scene().root());
+    obj* skyNode = app.sceneQuery().skybox(app.scene().root());
     if (!skyNode) return nullptr;
 
     const char *skyPath = nullptr, *reflPath = nullptr, *envPath = nullptr;
@@ -363,7 +327,8 @@ void ScenePanel::walkShadowPass(obj* node, EditorApp& app) {
     // FALLBACK: skinned-glTF meshes go through the old per-mesh path
     // because the batch doesn't handle the bone-UBO upload yet (Phase 3).
     (void)node;
-    if (meshNodes_.empty()) return;
+    const auto& meshes = app.sceneQuery().meshNodes(app.scene().root());
+    if (meshes.empty()) return;
 
     // Find a prototype model — the first compatible cached mesh. The
     // prototype provides the shadow shader handle + cached uniform_t
@@ -380,7 +345,7 @@ void ScenePanel::walkShadowPass(obj* node, EditorApp& app) {
     }
     if (!proto) {
         // Nothing compatible — fall back to the old per-mesh path.
-        for (obj* m : meshNodes_) renderMeshShadowOnly(m, app);
+        for (obj* m : meshes) renderMeshShadowOnly(m, app);
         return;
     }
 
@@ -392,7 +357,7 @@ void ScenePanel::walkShadowPass(obj* node, EditorApp& app) {
     // For 12 meshes x 6 faces, expect ~50-65% culled per face (each face
     // only covers ~1/6 of a sphere).
     const frustum sh_frustum = sm_.shadow_frustum;
-    for (obj* m : meshNodes_) {
+    for (obj* m : meshes) {
         const char* relPath = editor_mesh_renderer_path(m);
         if (!relPath || !*relPath) continue;
         std::string absPath = app.assets().absPathFor(m, relPath);
@@ -448,67 +413,32 @@ void ScenePanel::walkShadowPass(obj* node, EditorApp& app) {
     editor_profile_set_counter("Editor.Shadow.CulledPerFace",    (double)sh_culled);
 }
 
-void ScenePanel::collectLights(obj* node, std::vector<light_t>& out) {
-    // Flat-list path: iterate the cached lightNodes_ instead of walking the
-    // tree. Tree mutation events (kEvtSceneDirty / kEvtSceneReplaced) flip
-    // flatListsDirty_, which triggers a rebuild before this is called.
-    (void)node;  // kept for ABI compatibility; we use the cached list.
-    out.reserve(lightNodes_.size());
-    for (obj* n : lightNodes_) {
-        light_t l;
-        editor_light_ref_to_light_t(n, &l);
-        out.push_back(l);
-    }
-}
+// collectLights / rebuildFlatLists_ moved to editor::SceneQuery (Refaktor F3).
+// renderScene inlines the LightRef → light_t conversion (5 lines, single
+// call site). Tree-walk runs once per scene mutation, shared with GamePanel.
 
-// One-time bus subscription: any scene mutation (Inspector edit, gizmo drag,
-// AddNode, etc.) sets flatListsDirty_, so the next frame rebuilds. Wired
-// lazily on first renderScene since EditorApp isn't available at ctor time.
+// One-time bus subscription for the MaterialOverrides apply cache. Scene
+// mutations are dispatched separately by SceneQuery (it owns the flat
+// lists and singleton cache). Here we only need to invalidate
+// `overridesApplied_` so the next frame re-applies overrides per mesh.
 void ScenePanel::wireBusIfNeeded_(EditorApp& app) {
     if (busWired_) return;
     busWired_ = true;
-    // Any scene mutation invalidates both caches: (a) flat node lists,
-    // because nodes might have been added / removed / reparented; and
-    // (b) the MaterialOverrides per-node "is applied?" set, because the
-    // edit might have changed an override field on any mesh.
-    auto invalidateAll = [this](const std::any&){
-        flatListsDirty_ = true;
-        overridesApplied_.clear();
-    };
-    app.bus().on(kEvtSceneDirty,    invalidateAll);
-    app.bus().on(kEvtSceneReplaced, invalidateAll);
-    app.bus().on(kEvtNodeAdded,     invalidateAll);
-    app.bus().on(kEvtNodeRemoved,   invalidateAll);
-}
-
-// Recursive walk that fills meshNodes_ + lightNodes_ from the scene tree.
-// Only runs on tree mutation — render frames iterate the flat lists.
-void ScenePanel::rebuildFlatLists_(obj* root) {
-    meshNodes_.clear();
-    lightNodes_.clear();
-    // Local recursion via a hand-rolled stack (avoids a separate helper).
-    std::vector<obj*> stack;
-    if (root) stack.push_back(root);
-    while (!stack.empty()) {
-        obj* n = stack.back();
-        stack.pop_back();
-        if (editor_obj_is_mesh_renderer(n)) meshNodes_.push_back(n);
-        else if (editor_obj_is_light_ref(n)) lightNodes_.push_back(n);
-        int cnt = editor_obj_child_count(n);
-        for (int i = 0; i < cnt; ++i) {
-            if (obj* c = editor_obj_child_at(n, i)) stack.push_back(c);
-        }
-    }
-    flatListsDirty_ = false;
+    auto invalidate = [this](const std::any&){ overridesApplied_.clear(); };
+    app.bus().on(kEvtSceneDirty,    invalidate);
+    app.bus().on(kEvtSceneReplaced, invalidate);
+    app.bus().on(kEvtNodeAdded,     invalidate);
+    app.bus().on(kEvtNodeRemoved,   invalidate);
 }
 
 void ScenePanel::walkAndRender(obj* node, EditorApp& app,
                                const std::vector<light_t>& lights,
                                obj* fogNode, skybox_t* sky) {
-    // Flat-list path: linear iteration over meshNodes_ instead of the
-    // recursive tree walk.
+    // Flat-list path: linear iteration over the SceneQuery-cached mesh
+    // nodes (Refaktor F3) instead of a recursive tree walk.
     (void)node;
     EDITOR_PROFILE("Editor.Scene.WalkRecurse");
+    const auto& meshes = app.sceneQuery().meshNodes(app.scene().root());
 
     // Camera-frustum cull. The motor's model_render does its own internal
     // model_is_visible test, but only AFTER allocating instancing buffers
@@ -528,10 +458,10 @@ void ScenePanel::walkAndRender(obj* node, EditorApp& app,
     // back-to-front by camera distance.
     struct TransparentEntry { obj* node; float dist2; };
     std::vector<TransparentEntry> transparents;
-    transparents.reserve(meshNodes_.size() / 4);
+    transparents.reserve(meshes.size() / 4);
 
     int rendered = 0, culled = 0;
-    for (obj* m : meshNodes_) {
+    for (obj* m : meshes) {
         // Resolve the model_t pointer via the shared AssetManager cache.
         // We need the bounding sphere BEFORE the full setup, so we do a
         // cache-only lookup. First-sighting / load-pending nodes fall through
@@ -616,13 +546,9 @@ void ScenePanel::renderScene(int w, int h, bool inputAllowed, EditorApp& app) {
     frameModelPaths_.clear();
     frameMeshCount_ = 0;
 
-    // Subscribe to scene-mutation events once. Each rebuild walks the tree
-    // exactly ONE time and stores meshNodes_ / lightNodes_ flat lists.
+    // Subscribe to scene-mutation events once (for the overridesApplied_
+    // cache only — SceneQuery owns its own subscription for the flat lists).
     wireBusIfNeeded_(app);
-    if (flatListsDirty_) {
-        EDITOR_PROFILE("Editor.Scene.RebuildFlatLists");
-        rebuildFlatLists_(app.scene().root());
-    }
 
     editorFreefly(&cam_, !inputAllowed);
 
@@ -637,11 +563,19 @@ void ScenePanel::renderScene(int w, int h, bool inputAllowed, EditorApp& app) {
     float listenerPos[3] = { cam_.position.x, cam_.position.y, cam_.position.z };
     app.play().updateAudio(app, listenerPos);
 
-    // 1) light gathering.
+    // 1) light gathering. Iterate the SceneQuery-cached LightRef nodes (Refaktor
+    // F3) and convert each to a motor `light_t`. Tree walk happens at most
+    // once per scene mutation, shared with GamePanel.
     std::vector<light_t> lights;
     {
         EDITOR_PROFILE("Editor.Scene.CollectLights");
-        collectLights(app.scene().root(), lights);
+        const auto& lightNodes = app.sceneQuery().lightNodes(app.scene().root());
+        lights.reserve(lightNodes.size());
+        for (obj* n : lightNodes) {
+            light_t l;
+            editor_light_ref_to_light_t(n, &l);
+            lights.push_back(l);
+        }
     }
 
     // 2) shadowmap pass — runs iff at least one light has cast_shadows=1.
@@ -665,7 +599,7 @@ void ScenePanel::renderScene(int w, int h, bool inputAllowed, EditorApp& app) {
         // lambda, PCF filter size, etc.) if present. shadowmap_begin picks up
         // the new sizes; filter/window changes trigger an internal rebuild.
         bool shadowNodeFound = false;
-        if (obj* shadowNode = findShadowSettings(app.scene().root())) {
+        if (obj* shadowNode = app.sceneQuery().shadowSettings(app.scene().root())) {
             editor_shadow_settings_apply(shadowNode, &sm_);
             shadowNodeFound = true;
         }
@@ -695,7 +629,7 @@ void ScenePanel::renderScene(int w, int h, bool inputAllowed, EditorApp& app) {
     }
 
     // 3) main render pass — with lights + shadowmap + fog + skybox/IBL.
-    obj* fogNode = findFogSettings(app.scene().root());
+    obj* fogNode = app.sceneQuery().fog(app.scene().root());
 
     // Skybox: resolve from the scene's Skybox node (cached + mtime-poll), render
     // background if its render_background flag is on.
@@ -717,7 +651,7 @@ void ScenePanel::renderScene(int w, int h, bool inputAllowed, EditorApp& app) {
     ddraw_flush();
 
     if (sky) {
-        obj* skyNode = findSkyboxNode(app.scene().root());
+        obj* skyNode = app.sceneQuery().skybox(app.scene().root());
         int render_bg = 1;
         if (skyNode) editor_skybox_get(skyNode, nullptr, nullptr, nullptr, &render_bg);
         if (render_bg) skybox_render(sky, cam_.proj, cam_.view);

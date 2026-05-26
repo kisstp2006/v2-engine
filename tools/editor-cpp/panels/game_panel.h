@@ -25,9 +25,7 @@ public:
 
 private:
     void ensureFbo(int w, int h);
-    obj* findActiveCamera(obj* node);
     void renderWithCamera(obj* cameraNode, int w, int h, EditorApp& app);
-    void collectLights(obj* node, std::vector<light_t>& out);
     void walkAndRenderMeshes(obj* node, EditorApp& app, camera_t& cam,
                              const std::vector<light_t>& lights,
                              obj* fogNode, skybox_t* sky);
@@ -58,15 +56,12 @@ private:
 
     // Perf parity with ScenePanel (see scene_panel.h for the full rationale).
 
-    // (2) Flat node lists, rebuilt only on tree mutation, iterated every
-    //     frame instead of the recursive child_count + child_at chain.
-    //     ~2-3 ms / frame saved in non-trivial scenes.
-    bool                busWired_       = false;
-    bool                flatListsDirty_ = true;
-    std::vector<obj*>   meshNodes_;
-    std::vector<obj*>   lightNodes_;
+    // Flat node lists + scene-singletons moved to editor::SceneQuery
+    // (Refaktor F3). One shared instance lives in EditorApp::sceneQuery_;
+    // both Scene and Game panels read from it. Only the bus subscription
+    // for the MaterialOverrides apply cache remains here.
+    bool busWired_ = false;
     void wireBusIfNeeded_(EditorApp& app);
-    void rebuildFlatLists_(obj* root);
 
     // (3) MaterialOverrides apply cache. The motor's per-mesh material_t
     //     struct-copy (~1.5 KB) + bit-mask overlay runs per mesh per frame

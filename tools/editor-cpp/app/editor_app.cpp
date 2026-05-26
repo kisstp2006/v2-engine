@@ -28,6 +28,7 @@
 #include "../persistence/material_override_io.h"
 #include "../runtime/gltf_asset_extractor.h"
 #include "../runtime/script_host.h"
+#include "../runtime/lua_repl.h"
 #include "../runtime/cook_runner.h"
 #include "../runtime/asset_validator.h"
 #include "../runtime/ffi_to_emmylua.h"
@@ -497,6 +498,11 @@ void EditorApp::saveSelectedAsPrefab() {
 ScriptHost& EditorApp::scriptHost() {
     if (!scriptHost_) scriptHost_ = std::make_unique<ScriptHost>(*this);
     return *scriptHost_;
+}
+
+LuaRepl& EditorApp::luaRepl() {
+    if (!luaRepl_) luaRepl_ = std::make_unique<LuaRepl>(*this);
+    return *luaRepl_;
 }
 
 CookRunner& EditorApp::cookRunner() {

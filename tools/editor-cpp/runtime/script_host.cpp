@@ -369,6 +369,28 @@ bool ScriptHost::loadScript(obj* scriptNode) {
     return true;
 }
 
+bool ScriptHost::initStandaloneState(lua_State* L) {
+    if (!L) return false;
+    // 1) engine.ffi cdef + C namespace. bindEngineFFI uses app_.bus().emit for
+    //    diagnostic logs; setup-time issues land in the Console (acceptable —
+    //    the user can still investigate from there).
+    if (!bindEngineFFI(L)) return false;
+    // 2) `node` + `scene` helper module. Silently swallow load errors (the
+    //    state remains usable with raw `_C.*` calls).
+    if (luaL_loadstring(L, kNodeApiLua) == 0) {
+        if (pcallWithTraceback(L, 0, 0) != 0) {
+            const char* err = lua_tostring(L, -1);
+            app_.bus().emit("log",
+                std::string("[REPL] node-api load failed: ") +
+                (err ? err : "?"));
+            lua_pop(L, 1);
+        }
+    } else {
+        lua_pop(L, 1);
+    }
+    return true;
+}
+
 void ScriptHost::unloadScript(obj* scriptNode) {
     auto it = vms_.find(scriptNode);
     if (it == vms_.end()) return;

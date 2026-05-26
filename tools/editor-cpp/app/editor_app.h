@@ -18,6 +18,7 @@ namespace editor {
 class Panel;
 class ConsolePanel;
 class ScriptHost;
+class LuaRepl;
 class CookRunner;
 
 class EditorApp {
@@ -104,6 +105,7 @@ public:
     CommandStack&     commands()  { return commands_; }
     PlayMode&         play()      { return play_; }
     ScriptHost&       scriptHost();                      /* lazy-init */
+    LuaRepl&          luaRepl();                          /* lazy-init */
     CookRunner&       cookRunner();                       /* lazy-init */
     MainThreadQueue&  mainQueue() { return mainQueue_; }
     int&              gizmoOp()   { return gizmoOp_; }   /* IMGUIZMO_OPERATION */
@@ -193,6 +195,7 @@ private:
     CommandStack     commands_;
     PlayMode         play_;
     std::unique_ptr<ScriptHost>  scriptHost_;
+    std::unique_ptr<LuaRepl>     luaRepl_;
     std::unique_ptr<CookRunner>  cookRunner_;
     /* IMGUIZMO_OPERATION: 7 = TRANSLATE, 120 = ROTATE, 896 = SCALE_UNI
        (full-axis variants). Initially TRANSLATE. */

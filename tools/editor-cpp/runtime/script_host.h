@@ -73,6 +73,13 @@ public:
     // true if an active VM exists for the node (loadScript succeeded).
     bool hasVm(obj* scriptNode) const;
 
+    // Initialize a free-standing Lua state with the editor's standard
+    // environment (engine.ffi cdef + node/scene Lua helpers). Does NOT
+    // install a print redirect — the caller chooses where output goes.
+    // Used by the LuaRepl panel to set up its persistent eval VM.
+    // Returns false on hard failure (FFI cdef abort + node API both broken).
+    bool initStandaloneState(lua_State* L);
+
 private:
     void collectScriptNodes(obj* node, std::vector<obj*>& out);
     bool bindEngineFFI(lua_State* L);  // ffi.cdef(engine.ffi)

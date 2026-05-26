@@ -1,4 +1,5 @@
 // STL FIRST.
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -10,6 +11,8 @@
 
 #include "material_asset_io.h"
 #include "../core/asset_path.h"
+#include "../core/file_io.h"
+#include "../core/texture_loader.h"
 
 namespace editor::material_asset_io {
 
@@ -120,17 +123,21 @@ std::string saveMaterial(const material_t& m) {
 
 bool writeFile(const std::string& path, const material_t& m) {
     std::string s = saveMaterial(m);
-    return file_write(path.c_str(), s.c_str(), (int)s.size()) != 0;
+    // editor::file_io::writeText — atomic (.tmp + rename), creates parent
+    // dirs, STL-based (works on OneDrive Documents folders where motor
+    // file_write fails). See core/file_io.h for the full rationale.
+    return editor::file_io::writeText(path, s);
 }
 
 bool loadMaterial(const std::string& path,
                   const std::string& projectRoot,
                   material_t* out) {
     if (!out) return false;
-    int sz = 0;
-    char* content = file_read(path.c_str(), &sz);
-    if (!content || sz <= 0) return false;
-    std::string scratch(content, sz);
+    // editor::file_io::readText — STL-based, bypasses the motor's file_read
+    // which fails on certain Windows path configurations (OneDrive Documents
+    // online-only files). Same content, more robust.
+    std::string scratch = editor::file_io::readText(path);
+    if (scratch.empty()) return false;
 
     json5 root = {};
     char* err = json5_parse(&root, scratch.data(), 0);
@@ -227,7 +234,12 @@ bool loadMaterial(const std::string& path,
                     std::string abs = projectRoot.empty()
                         ? resolved
                         : asset_path::toAbsolute(resolved, projectRoot);
-                    colormap(&layer->map, abs.c_str(), isAlbedoOrEmissive(chIdx));
+                    // Route via the unified editor::texture_loader so the
+                    // load goes through editor::file_io (works on every
+                    // Windows path) instead of the motor's `colormap()` →
+                    // `texture_compressed()` → `file_read()` chain.
+                    editor::texture_loader::loadIntoColormap(
+                        &layer->map, abs, isAlbedoOrEmissive(chIdx));
                 }
             }
         }

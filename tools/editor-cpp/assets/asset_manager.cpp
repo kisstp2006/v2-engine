@@ -1,6 +1,8 @@
 // STL FIRST.
+#include <cstring>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "engine.h"
 #ifdef obj
@@ -12,6 +14,8 @@
 #include "../core/asset_path.h"
 #include "../core/event_bus.h"
 #include "../core/events.h"
+#include "../core/file_io.h"
+#include "../core/texture_loader.h"
 
 namespace editor {
 
@@ -89,13 +93,38 @@ model_t* AssetManager::loadModel(const std::string& absPath,
     // 4. Cache hit → return; else load + insert.
     auto it = models_.find(absPath);
     if (it == models_.end()) {
-        model_t mt = model(absPath.c_str(), 0);
+        // Motor `model(path, flags)` would internally do `file_read(path)` +
+        // `model_from_mem(buf, len, flags)`. The motor file_read fails on
+        // certain Windows path edge-cases (filenames with spaces, OneDrive
+        // online-only files, etc.). Replicate the load via editor::file_io +
+        // model_from_mem directly so the load works on every Windows path.
+        std::vector<uint8_t> bytes = editor::file_io::readBytes(absPath);
+        if (bytes.empty()) {
+            failedPaths_.insert(absPath);
+            bus_->emit(kEvtLogInfo,
+                std::string("[Mesh] read failed: ") + relPathForLog);
+            return nullptr;
+        }
+        // model_from_mem internals (IQM: memcpy into q->buf; GLTF: cgltf_parse
+        // + cgltf_free in the same call → mesh data already in VBO/IBO before
+        // the function returns) do not retain a pointer to `mem` past the
+        // call. Still, mirror the audio()/tiled() STRDUP convention so we are
+        // robust against future motor changes — models are rare per project,
+        // so the heap copy is negligible.
+        char* contentHeap = (char*)MALLOC(bytes.size());
+        memcpy(contentHeap, bytes.data(), bytes.size());
+        model_t mt = model_from_mem(contentHeap, (int)bytes.size(), 0);
         if (!mt.iqm) {
+            FREE(contentHeap);
             failedPaths_.insert(absPath);
             bus_->emit(kEvtLogInfo,
                 std::string("[Mesh] load failed: ") + relPathForLog);
             return nullptr;
         }
+        // Motor `model()` STRDUPs the filename onto `mt.filename`; replicate
+        // so downstream code (which logs / compares filenames) gets the
+        // expected absolute-path string.
+        mt.filename = STRDUP(absPath.c_str());
         auto ins = models_.emplace(absPath, mt);
         it = ins.first;
         modelMtimes_[absPath] = mt_now;
@@ -171,7 +200,10 @@ texture_t* AssetManager::loadTexture(const std::string& absPath,
 
     auto it = textures_.find(absPath);
     if (it == textures_.end()) {
-        texture_t tx = texture(absPath.c_str(), 0);
+        // Route through the unified editor::texture_loader — same code path
+        // that material_asset_io / material_drop_target use. STRDUP'd
+        // filename + GPU upload all happen inside loadCompressed().
+        texture_t tx = editor::texture_loader::loadCompressed(absPath, 0);
         if (!tx.id) {
             failedPaths_.insert(absPath);
             bus_->emit(kEvtLogInfo,
@@ -216,15 +248,23 @@ tiled_t* AssetManager::loadTilemap(const std::string& absPath,
 
     auto it = tilemaps_.find(absPath);
     if (it == tilemaps_.end()) {
-        // `tiled()` expects TMX content, not the path — file_read first.
-        char* content = file_read(absPath.c_str(), 0);
-        if (!content || !*content) {
+        // `tiled()` expects TMX content, not the path. Use editor::file_io
+        // (STL fstream) instead of the motor's file_read — robust against
+        // Windows path-edge-cases (OneDrive online-only files, etc.).
+        std::string content = editor::file_io::readText(absPath);
+        if (content.empty()) {
             failedPaths_.insert(absPath);
             bus_->emit(kEvtLogInfo,
                 std::string("[Tilemap] read failed: ") + relPathForLog);
             return nullptr;
         }
-        tiled_t tm = tiled(content);
+        // tiled() may keep a pointer into the buffer past the parse call
+        // (the pre-refactor code relied on the motor's STRDUP-like slot
+        // buffer staying alive). STRDUP to a heap copy that lives as long
+        // as the cache entry. Tilemaps are rare per project, so the leak
+        // (no destroy hook in motor) is negligible.
+        char* mutbuf = STRDUP(content.c_str());
+        tiled_t tm = tiled(mutbuf);
         // first_gid == 0 indicates a parse failure (scene_panel_2d convention).
         if (!tm.first_gid) {
             failedPaths_.insert(absPath);

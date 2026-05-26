@@ -11,6 +11,7 @@
 #include "../components/components_api.h"
 #include "../core/event_bus.h"
 #include "../core/asset_path.h"
+#include "../core/file_io.h"
 #include "../core/selection_service.h"
 #include "../persistence/scene_io.h"
 #include "../scene/scene_helpers.h"
@@ -24,11 +25,18 @@ void PlayMode::startAudioFor(EditorApp& app, obj* node) {
     if (!relPath || !*relPath) return;
     // Phase 4a — abs-resolve.
     std::string absPath = asset_path::toAbsolute(relPath, app.projectPath());
-    if (!is_file(absPath.c_str())) return;
+    if (!editor::file_io::isFile(absPath)) return;
 
-    int len = 0;
-    char* content = file_read(absPath.c_str(), &len);
-    if (!content || len <= 0) return;
+    // editor::file_io::readBytes — STL-based binary read, robust against the
+    // motor's file_read Windows path edge-cases. The motor `audio()` decoder
+    // may keep a pointer into the buffer past the parse call (it stores PCM
+    // samples extracted from the source format), so STRDUP the bytes to a
+    // heap buffer that outlives the std::vector scope.
+    std::vector<uint8_t> bytes = editor::file_io::readBytes(absPath);
+    if (bytes.empty()) return;
+    char* content = (char*)MALLOC(bytes.size());
+    memcpy(content, bytes.data(), bytes.size());
+    int len = (int)bytes.size();
 
     audio_t clip = audio(content, len, AUDIO_CLIP);
     if (clip.err) return;

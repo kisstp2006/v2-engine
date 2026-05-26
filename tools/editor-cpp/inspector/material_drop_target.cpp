@@ -9,6 +9,7 @@
 
 #include "material_drop_target.h"
 #include "../core/asset_path.h"
+#include "../core/texture_loader.h"
 
 namespace editor::material_drop {
 
@@ -91,7 +92,11 @@ bool drawTextureChannel(material_t* m,
             std::string abs = projectRoot.empty()
                 ? std::string(L->texname)
                 : asset_path::toAbsolute(L->texname, projectRoot);
-            colormap(&L->map, abs.c_str(), isSrgbChannel(channelIdx));
+            // Route via the unified editor::texture_loader (editor::file_io
+            // backend) instead of the motor's `colormap()` → `file_read()`
+            // chain — same migration as material_asset_io::loadMaterial.
+            editor::texture_loader::loadIntoColormap(
+                &L->map, abs, isSrgbChannel(channelIdx));
         } else {
             L->map.texture = nullptr;
         }

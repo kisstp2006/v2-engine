@@ -19,6 +19,7 @@
 #include "../components/components_api.h"
 #include "../core/asset_path.h"
 #include "../core/event_bus.h"
+#include "../core/file_io.h"
 #include "../panels/console_panel.h"
 #include "../scene/scene_helpers.h"
 #include "../scene/scene_service.h"
@@ -34,11 +35,10 @@ const std::string& engineFFI() {
     static bool loaded = false;
     if (!loaded) {
         loaded = true;
-        int len = 0;
-        char* raw = file_read("code/game/embed/engine.ffi", &len);
-        if (raw && len > 0) {
-            content.assign(raw, (size_t)len);   // preserves embedded \0s as well
-        }
+        // editor::file_io::readText — STL-based, CWD-relative resolve works
+        // identically to motor file_read here (no Windows path edge-case in
+        // play because this is a build-tree path, not a user-project path).
+        content = editor::file_io::readText("code/game/embed/engine.ffi");
     }
     return content;
 }

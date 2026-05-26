@@ -37,10 +37,7 @@ ScenePanel::ScenePanel() : Panel("scene", "Scene") {
 
 ScenePanel::~ScenePanel() {
     framebuffer_destroy(fbo_, width_, height_);
-    if (sm_init_) {
-        shadowmap_destroy(&sm_);
-        sm_init_ = false;
-    }
+    // Shadowmap cleanup moved to RenderSystem3D dtor (Refaktor F4 step #3).
     // Skybox cleanup runs in AssetManager dtor (shared with GamePanel).
 }
 
@@ -194,13 +191,14 @@ static void drawText3DOverlays_scene(obj* root) {
     ddraw_flush();
 }
 
-skybox_t* ScenePanel::resolveSkybox(EditorApp& app) {
+skybox_t* ScenePanel::resolveSkybox(EditorApp& app, int* render_bg_out) {
     obj* skyNode = app.sceneQuery().skybox(app.scene().root());
     if (!skyNode) return nullptr;
 
     const char *skyPath = nullptr, *reflPath = nullptr, *envPath = nullptr;
     int render_bg = 1;
     editor_skybox_get(skyNode, &skyPath, &reflPath, &envPath, &render_bg);
+    if (render_bg_out) *render_bg_out = render_bg;
     if (!skyPath || !*skyPath) return nullptr;
 
     std::string absSky  = asset_path::toAbsolute(skyPath,  app.projectPath());
@@ -211,112 +209,14 @@ skybox_t* ScenePanel::resolveSkybox(EditorApp& app) {
     return app.assets().loadSkybox(absSky, absRefl, absEnv);
 }
 
-void ScenePanel::renderMeshNode(obj* node, EditorApp& app,
-                                const std::vector<light_t>& lights,
-                                obj* fogNode, skybox_t* sky) {
-    const char* relPath = editor_mesh_renderer_path(node);
-    if (!relPath || !*relPath) return;
+// renderMeshNode moved to editor::RenderSystem3D (Refaktor F4 step #4).
+// The panel no longer needs a wrapper — renderSystem3D_.renderMainPass
+// handles per-mesh load + frustum cull + transparency sort + draw.
 
-    // Refaktor F1: rel→abs resolve and model load both go through AssetManager.
-    // The per-obj* path cache + the per-path is_file/mtime/failedPaths/load
-    // chain that used to live here now live in `app.assets()` and are shared
-    // between Scene/Game/Scene2D panels.
-    std::string absPath;
-    {
-        EDITOR_PROFILE("Editor.Scene.Mesh.PathResolve");
-        absPath = app.assets().absPathFor(node, relPath);
-    }
-
-    model_t* m;
-    {
-        EDITOR_PROFILE("Editor.Scene.Mesh.CacheLookup");
-        m = app.assets().loadModel(absPath, relPath);
-        if (!m) return;   // not on disk, in failedPaths timeout, or load failed
-    }
-
-    // Per-frame mesh tracking for the Profiler. Insert AFTER the load gate
-    // so missing-file ghosts don't inflate the counts. Tracks "how many
-    // meshes were actually drawable this frame".
-    ++frameMeshCount_;
-    frameModelPaths_.insert(absPath);
-
-    // Engine-side uniform bind: lights UBO + shadow texture + fog block +
-    // skybox/IBL textures. Tracked separately from ModelRender so we can
-    // tell whether the cost is in the prep or in the GL draw itself.
-    {
-        EDITOR_PROFILE("Editor.Scene.Mesh.UniformPrep");
-        if (!lights.empty()) {
-            model_light(m, (unsigned)lights.size(),
-                        const_cast<light_t*>(lights.data()));
-        } else {
-            model_light(m, 0, nullptr);
-        }
-        model_shadow(m, sm_init_ ? &sm_ : nullptr);
-
-        if (fogNode) {
-            int mode = 0; vec3 color = {0,0,0};
-            float start = 0.f, end = 1.f, density = 0.f;
-            editor_fog_settings_get(fogNode, &mode, &color, &start, &end, &density);
-            model_fog(m, (unsigned)mode, color, start, end, density);
-        } else {
-            vec3 black = {0,0,0};
-            model_fog(m, 0u, black, 0.f, 1.f, 0.f);
-        }
-        if (sky) {
-            model_skybox(m, *sky);
-        } else {
-            skybox_t empty = {0};
-            model_skybox(m, empty);
-        }
-    }
-
-    // Material overrides (Blokk 2.5) — per-slot asset-ref + inline overlay.
-    // Skip the ~1.5 KB struct-copy + name-match work if THIS node already had
-    // its overrides applied since the last scene mutation. The bus handlers
-    // in wireBusIfNeeded_() clear overridesApplied_ on kEvtSceneDirty et al.
-    if (overridesApplied_.find(node) == overridesApplied_.end()) {
-        EDITOR_PROFILE("Editor.Scene.Mesh.MaterialOverrides");
-        material_override_io::applyOverridesToModel(
-            node, m, app.projectPath());
-        overridesApplied_.insert(node);
-    }
-
-    mat44 pivot;
-    {
-        EDITOR_PROFILE("Editor.Scene.Mesh.PivotCompose");
-        editor_mesh_renderer_compose_pivot(node, pivot);
-        if (m->flags & MODEL_GLTF_SKINNED) {
-            mat44 zrot180; id44(zrot180); zrot180[0] = -1.0f; zrot180[5] = -1.0f;
-            mat44 tmp; multiply44x2(tmp, pivot, zrot180);
-            memcpy(pivot, tmp, sizeof(mat44));
-        }
-    }
-    // pass = -1 → every default pass (lighting, shading, shadow-sampling).
-    {
-        EDITOR_PROFILE("Editor.Scene.Mesh.ModelRender");
-        model_render(m, cam_.proj, cam_.view, &pivot, 1, -1);
-    }
-}
-
-void ScenePanel::renderMeshShadowOnly(obj* node, EditorApp& app) {
-    const char* relPath = editor_mesh_renderer_path(node);
-    if (!relPath || !*relPath) return;
-    std::string absPath = app.assets().absPathFor(node, relPath);
-    model_t* m = app.assets().modelByAbsPath(absPath);
-    if (!m) return;   // not yet cached — main pass will load on its frame
-    mat44 pivot;
-    editor_mesh_renderer_compose_pivot(node, pivot);
-    // Same skinned-glTF flip as the main render-walk, otherwise the shadow
-    // silhouette wouldn't match the visible mesh.
-    if (m->flags & MODEL_GLTF_SKINNED) {
-        mat44 zrot180; id44(zrot180); zrot180[0] = -1.0f; zrot180[5] = -1.0f;
-        mat44 tmp; multiply44x2(tmp, pivot, zrot180);
-        memcpy(pivot, tmp, sizeof(mat44));
-    }
-    model_render(m, cam_.proj, cam_.view, &pivot, 1,
-                 RENDER_PASS_SHADOW);
-}
-
+// renderMeshShadowOnly + walkShadowPass moved to editor::RenderSystem3D
+// (Refaktor F4 step #3). The panel now calls renderSystem3D_.renderShadowPass
+// which drives the whole shadowmap_step loop internally.
+#if 0
 void ScenePanel::walkShadowPass(obj* node, EditorApp& app) {
     // Plan B Phase 1: batched shadow pass. Called once per cubemap face by
     // the shadowmap_step loop. We bind the shadow shader + face uniforms +
@@ -412,143 +312,26 @@ void ScenePanel::walkShadowPass(obj* node, EditorApp& app) {
     editor_profile_set_counter("Editor.Shadow.FallbackPerFace",  (double)fellback);
     editor_profile_set_counter("Editor.Shadow.CulledPerFace",    (double)sh_culled);
 }
+#endif
 
 // collectLights / rebuildFlatLists_ moved to editor::SceneQuery (Refaktor F3).
 // renderScene inlines the LightRef → light_t conversion (5 lines, single
 // call site). Tree-walk runs once per scene mutation, shared with GamePanel.
+//
+// MaterialOverrides apply cache + its bus subscription moved to
+// editor::RenderSystem3D (Refaktor F4 step #2) — owned by the render system,
+// auto-wired on first `renderMeshNode` call.
 
-// One-time bus subscription for the MaterialOverrides apply cache. Scene
-// mutations are dispatched separately by SceneQuery (it owns the flat
-// lists and singleton cache). Here we only need to invalidate
-// `overridesApplied_` so the next frame re-applies overrides per mesh.
-void ScenePanel::wireBusIfNeeded_(EditorApp& app) {
-    if (busWired_) return;
-    busWired_ = true;
-    auto invalidate = [this](const std::any&){ overridesApplied_.clear(); };
-    app.bus().on(kEvtSceneDirty,    invalidate);
-    app.bus().on(kEvtSceneReplaced, invalidate);
-    app.bus().on(kEvtNodeAdded,     invalidate);
-    app.bus().on(kEvtNodeRemoved,   invalidate);
-}
-
-void ScenePanel::walkAndRender(obj* node, EditorApp& app,
-                               const std::vector<light_t>& lights,
-                               obj* fogNode, skybox_t* sky) {
-    // Flat-list path: linear iteration over the SceneQuery-cached mesh
-    // nodes (Refaktor F3) instead of a recursive tree walk.
-    (void)node;
-    EDITOR_PROFILE("Editor.Scene.WalkRecurse");
-    const auto& meshes = app.sceneQuery().meshNodes(app.scene().root());
-
-    // Camera-frustum cull. The motor's model_render does its own internal
-    // model_is_visible test, but only AFTER allocating instancing buffers
-    // and running model_analyseshader — too late to save the editor-side
-    // prep work (path resolve, model_light, model_fog, model_skybox,
-    // material override apply, pivot compose). We do the cull HERE and
-    // skip the entire setup for invisible meshes.
-    mat44 projview; multiply44x2(projview, cam_.proj, cam_.view);
-    frustum cam_frustum = frustum_build(projview);
-
-    // Cross-mesh transparency sorting. The motor's transparent renderstate
-    // enables blend BUT doesn't disable depth-write — so a transparent
-    // mesh drawn FIRST writes depth at every fragment (including the
-    // discarded/alpha-cutout pixels), occluding opaque meshes drawn AFTER
-    // it (e.g. a wire-mesh trash basket would cut out the floor visible
-    // through its holes). Fix: render opaque first, then transparent
-    // back-to-front by camera distance.
-    struct TransparentEntry { obj* node; float dist2; };
-    std::vector<TransparentEntry> transparents;
-    transparents.reserve(meshes.size() / 4);
-
-    int rendered = 0, culled = 0;
-    for (obj* m : meshes) {
-        // Resolve the model_t pointer via the shared AssetManager cache.
-        // We need the bounding sphere BEFORE the full setup, so we do a
-        // cache-only lookup. First-sighting / load-pending nodes fall through
-        // to renderMeshNode which does the actual load.
-        const char* relPath = editor_mesh_renderer_path(m);
-        if (!relPath || !*relPath) continue;
-        std::string absPath = app.assets().absPathFor(m, relPath);
-        model_t* mp = app.assets().modelByAbsPath(absPath);
-        if (!mp) {
-            renderMeshNode(m, app, lights, fogNode, sky);
-            ++rendered;
-            continue;
-        }
-
-        // Cull-mode gate:
-        //   - cull_mode = 1 (Always Render) → never cull this mesh.
-        //   - skinned model → never cull (rest-pose bsphere doesn't reflect
-        //     animated bone deformation; the mesh's actual extent can be
-        //     2-3 m beyond the static sphere).
-        //   - panel toolbar `frustum_cull_` toggle OFF → bypass for debug.
-        bool can_cull = frustum_cull_ &&
-                        editor_mesh_renderer_cull_mode(m) == 0 &&
-                        !(mp->flags & MODEL_GLTF_SKINNED) &&
-                        mp->num_joints == 0;
-        if (can_cull) {
-            mat44 cull_pivot;
-            editor_mesh_renderer_compose_pivot(m, cull_pivot);
-            sphere bs = model_bsphere(*mp, cull_pivot);
-            if (!frustum_test_sphere(cam_frustum, bs)) {
-                ++culled;
-                continue;
-            }
-        }
-
-        // Defer transparent meshes to a sorted second pass. We use the
-        // motor's `model_has_transparency` (true if any submesh has
-        // albedo.color.a < 1 OR the albedo texture has a non-trivial
-        // alpha channel). Distance is squared (sorting key only) from
-        // the mesh's pivot to the camera position.
-        if (model_has_transparency(mp)) {
-            mat44 dist_pivot;
-            editor_mesh_renderer_compose_pivot(m, dist_pivot);
-            vec3 cam_pos = pos44(cam_.view);
-            vec3 mesh_pos = vec3(dist_pivot[12], dist_pivot[13], dist_pivot[14]);
-            vec3 d = sub3(mesh_pos, cam_pos);
-            float d2 = d.x*d.x + d.y*d.y + d.z*d.z;
-            transparents.push_back({m, d2});
-            continue;
-        }
-
-        renderMeshNode(m, app, lights, fogNode, sky);
-        ++rendered;
-    }
-
-    // Second pass: transparents, back-to-front (far to near). For correct
-    // alpha blending, the GL pipeline needs the most-distant transparent
-    // surface drawn FIRST so closer ones blend over it. Within a single
-    // model the motor's model_draw_call already z-sorts submeshes; this
-    // sort handles the cross-model case.
-    if (!transparents.empty()) {
-        std::sort(transparents.begin(), transparents.end(),
-            [](const TransparentEntry& a, const TransparentEntry& b) {
-                return a.dist2 > b.dist2;
-            });
-        for (const auto& t : transparents) {
-            renderMeshNode(t.node, app, lights, fogNode, sky);
-            ++rendered;
-        }
-    }
-
-    editor_profile_set_counter("Editor.Scene.MeshesRendered",     (double)rendered);
-    editor_profile_set_counter("Editor.Scene.MeshesCulled",       (double)culled);
-    editor_profile_set_counter("Editor.Scene.MeshesTransparent",  (double)transparents.size());
-}
+// walkAndRender moved to editor::RenderSystem3D::renderMainPass
+// (Refaktor F4 step #4). Counters published as Editor.Render.* (aggregated
+// across both viewports) — the Editor.Scene.MeshesRendered/Culled/Transparent
+// names are gone; check Editor.Render.MeshesDrawn/Culled/Transparent instead.
 
 void ScenePanel::renderScene(int w, int h, bool inputAllowed, EditorApp& app) {
     EDITOR_PROFILE("Editor.Scene.Total");
 
-    // Reset per-frame mesh tracking before the walk. renderMesh inserts into
-    // frameModelPaths_; the published counter at the end reflects how many
-    // unique .iqm/.gltf files we actually saw this frame.
-    frameModelPaths_.clear();
-    frameMeshCount_ = 0;
-
-    // Subscribe to scene-mutation events once (for the overridesApplied_
-    // cache only — SceneQuery owns its own subscription for the flat lists).
-    wireBusIfNeeded_(app);
+    // Per-frame counters (MeshCount, UniqueModels) reset + publish inside
+    // RenderSystem3D::renderMainPass (Refaktor F4 step #4).
 
     editorFreefly(&cam_, !inputAllowed);
 
@@ -578,62 +361,28 @@ void ScenePanel::renderScene(int w, int h, bool inputAllowed, EditorApp& app) {
         }
     }
 
-    // 2) shadowmap pass — runs iff at least one light has cast_shadows=1.
-    // Mirrors demos/16-shadows.c:238-249. shadowmap_begin saves the current
-    // FBO + viewport (= the editor FBO bound on line 402), shadowmap_end
-    // restores them, so the subsequent fx_begin / world render still lands
-    // in the editor FBO. Failing model_render calls during the shadow loop
-    // are no-ops (motor sets `skip_render` on degenerate cascade steps),
-    // and renderMeshShadowOnly bails early for not-yet-cached models.
-    bool any_caster = false;
-    for (const auto& l : lights) {
-        if (l.cast_shadows) { any_caster = true; break; }
-    }
-    if (any_caster) {
+    // 2) shadowmap pass — full lazy-init + ShadowSettings apply +
+    // shadowmap_step loop + batched walk in RenderSystem3D (Refaktor F4
+    // step #3). No-op if no light has cast_shadows=1. Debug counters
+    // published from there too.
+    // beginFrame builds the per-frame RenderableMesh list (model load + cache,
+    // pivot compose w/ skinned flip, bsphere, transparent + shadow-compat
+    // flags, camera dist²) ONCE. Shared with renderShadowPass + renderMainPass.
+    renderSystem3D_.beginFrame(app, cam_);
+
+    if (RenderSystem3D::hasAnyShadowCaster(lights)) {
         EDITOR_PROFILE("Editor.Scene.ShadowPass");
-        if (!sm_init_) {
-            sm_ = shadowmap();
-            sm_init_ = true;
-        }
-        // Apply scene-wide ShadowSettings (vsm/csm resolution, cascade-split
-        // lambda, PCF filter size, etc.) if present. shadowmap_begin picks up
-        // the new sizes; filter/window changes trigger an internal rebuild.
-        bool shadowNodeFound = false;
-        if (obj* shadowNode = app.sceneQuery().shadowSettings(app.scene().root())) {
-            editor_shadow_settings_apply(shadowNode, &sm_);
-            shadowNodeFound = true;
-        }
-
-        // Debug counters: publish to Profiler so we can verify the apply
-        // actually took effect. AppliedResolution should match the value
-        // typed into the ShadowSettings node Inspector; NumShadowCasters
-        // shows how many lights are doing a full shadow pass this frame.
-        editor_profile_set_counter("Editor.Shadow.AppliedResolution",
-                                   (double)sm_.vsm_texture_width);
-        editor_profile_set_counter("Editor.Shadow.ShadowSettingsFound",
-                                   shadowNodeFound ? 1.0 : 0.0);
-        int caster_count = 0;
-        for (const auto& l : lights) if (l.cast_shadows) ++caster_count;
-        editor_profile_set_counter("Editor.Shadow.NumShadowCasters",
-                                   (double)caster_count);
-
-        shadowmap_begin(&sm_);
-        for (size_t i = 0; i < lights.size(); ++i) {
-            if (!lights[i].cast_shadows) continue;
-            while (shadowmap_step(&sm_)) {
-                shadowmap_light(&sm_, &lights[i], cam_.proj, cam_.view);
-                walkShadowPass(app.scene().root(), app);
-            }
-        }
-        shadowmap_end(&sm_);
+        renderSystem3D_.renderShadowPass(app, cam_, lights, frustum_cull_);
     }
 
     // 3) main render pass — with lights + shadowmap + fog + skybox/IBL.
     obj* fogNode = app.sceneQuery().fog(app.scene().root());
 
     // Skybox: resolve from the scene's Skybox node (cached + mtime-poll), render
-    // background if its render_background flag is on.
-    skybox_t* sky = resolveSkybox(app);
+    // background if its render_background flag is on. The flag comes back in
+    // sky_render_bg (audit Finding I — eliminates the duplicate node fetch).
+    int sky_render_bg = 1;
+    skybox_t* sky = resolveSkybox(app, &sky_render_bg);
 
     // PostFX: same flow as game_panel — fx_begin/end wraps the world-render.
     // fbo_unbind() inside fx_end() pops back to fbo_.id via the motor's
@@ -650,16 +399,12 @@ void ScenePanel::renderScene(int w, int h, bool inputAllowed, EditorApp& app) {
     ddraw_grid(0);
     ddraw_flush();
 
-    if (sky) {
-        obj* skyNode = app.sceneQuery().skybox(app.scene().root());
-        int render_bg = 1;
-        if (skyNode) editor_skybox_get(skyNode, nullptr, nullptr, nullptr, &render_bg);
-        if (render_bg) skybox_render(sky, cam_.proj, cam_.view);
-    }
+    if (sky && sky_render_bg) skybox_render(sky, cam_.proj, cam_.view);
 
     {
         EDITOR_PROFILE("Editor.Scene.WalkAndRender");
-        walkAndRender(app.scene().root(), app, lights, fogNode, sky);
+        renderSystem3D_.renderMainPass(app, cam_, lights, fogNode, sky,
+                                       frustum_cull_);
     }
 
     // 3D label pass — Text3DRenderer nodes drawn in world-space via ddraw_text.
@@ -682,15 +427,9 @@ void ScenePanel::renderScene(int w, int h, bool inputAllowed, EditorApp& app) {
     drawTextOverlays_scene(app.scene().root());
 
     fbo_unbind();
-
-    // Publish per-frame mesh counters into the Profiler panel. Both numbers
-    // are reset at the start of the next renderScene. Ratio = duplication
-    // factor: MeshCount=20, UniqueModels=4 → instancing would collapse to 4
-    // draw "sessions" (huge win); MeshCount=20, UniqueModels=20 → no win.
-    editor_profile_set_counter("Editor.Scene.MeshCount",
-                               (double)frameMeshCount_);
-    editor_profile_set_counter("Editor.Scene.UniqueModels",
-                               (double)frameModelPaths_.size());
+    // Per-frame mesh counters published inside RenderSystem3D::renderMainPass
+    // (Editor.Render.MeshesDrawn / .MeshesCulled / .MeshesTransparent /
+    // .UniqueModels) — aggregated across both viewports.
 }
 
 void ScenePanel::draw(EditorApp& app) {

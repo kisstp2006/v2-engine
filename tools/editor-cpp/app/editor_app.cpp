@@ -17,6 +17,7 @@
 #include "../core/events.h"
 #include "../core/process_launcher.h"
 #include "../core/asset_path.h"
+#include "../core/file_io.h"
 #include "../core/fx_bundle.h"
 #include "../panels/panel.h"
 #include "../panels/console_panel.h"
@@ -224,7 +225,7 @@ void writePostFXSidecar(const std::string& scenePath, obj* root,
     if (!findPostFXStackNode_save(root)) return;
     std::string sidecar = postfxSidecarPath(scenePath);
     std::string blob    = postfx_state_io::snapshotEngineState();
-    int ok = file_write(sidecar.c_str(), blob.c_str(), (int)blob.size());
+    bool ok = editor::file_io::writeText(sidecar, blob);
     if (console) {
         console->log(std::string(ok ? "[PostFX] sidecar saved: "
                                     : "[PostFX] sidecar save failed: ")
@@ -240,13 +241,12 @@ void readPostFXSidecar(const std::string& scenePath, obj* root,
                        ConsolePanel* console) {
     if (!findPostFXStackNode_save(root)) return;
     std::string sidecar = postfxSidecarPath(scenePath);
-    if (!is_file(sidecar.c_str())) return;
+    if (!editor::file_io::isFile(sidecar)) return;
 
-    int sz = 0;
-    char* content = file_read(sidecar.c_str(), &sz);
-    if (!content || sz <= 0) return;
+    std::string content = editor::file_io::readText(sidecar);
+    if (content.empty()) return;
 
-    auto ar = postfx_state_io::applyEngineState(std::string(content, sz));
+    auto ar = postfx_state_io::applyEngineState(content);
     if (console) {
         char buf[160];
         snprintf(buf, sizeof(buf),
@@ -266,7 +266,7 @@ void readPostFXSidecar(const std::string& scenePath, obj* root,
 void EditorApp::saveScene() {
     if (lastSavedPath_.empty()) { saveSceneAs(); return; }
     std::string json = SceneIO::saveTree(scene_.root());
-    int ok = file_write(lastSavedPath_.c_str(), json.c_str(), (int)json.size());
+    bool ok = editor::file_io::writeText(lastSavedPath_, json);
     if (ok) {
         isDirty_ = false;
         bus_.emit(kEvtSceneDirty, false);
@@ -284,7 +284,7 @@ void EditorApp::saveSceneAs() {
     if (path.empty()) return;
 
     std::string json = SceneIO::saveTree(scene_.root());
-    int ok = file_write(path.c_str(), json.c_str(), (int)json.size());
+    bool ok = editor::file_io::writeText(path, json);
     if (ok) {
         lastSavedPath_ = path;
         isDirty_ = false;
@@ -326,15 +326,18 @@ void EditorApp::openScene() {
 }
 
 void EditorApp::openScene(const std::string& path) {
-    int size = 0;
-    char* content = file_read(path.c_str(), &size);
-    if (!content) {
+    // editor::file_io::readText — STL-based, robust against the motor's
+    // file_read Windows path-edge-case failures (OneDrive online-only files,
+    // mixed-slash abs paths). The Project panel and pickFile both pass
+    // Windows backslash paths; readText normalizes internally.
+    std::string content = editor::file_io::readText(path);
+    if (content.empty()) {
         if (console_) console_->log(std::string("[Scene] read failed: ") + path);
         return;
     }
     // Phase 4b — auto-migration: convert old abs-path fields in scenes
     // to relative during load.
-    LoadResult r = SceneIO::loadTreeDetailed(std::string(content), projectPath_);
+    LoadResult r = SceneIO::loadTreeDetailed(content, projectPath_);
     if (console_) {
         for (const auto& e : r.errors) {
             console_->log(std::string("[Scene] ") + e);
@@ -488,7 +491,7 @@ void EditorApp::saveSelectedAsPrefab() {
     std::string path = pickFile("Save Prefab", "prefab.json5", true);
     if (path.empty()) return;
     std::string json = SceneIO::saveSubtree(node);
-    int ok = file_write(path.c_str(), json.c_str(), (int)json.size());
+    bool ok = editor::file_io::writeText(path, json);
     if (console_) {
         console_->log(std::string(ok ? "[Prefab] saved: " : "[Prefab] save failed: ")
                       + path);
@@ -672,18 +675,21 @@ void EditorApp::loadProjectFXShaders() {
         std::string name = e.path().filename().string();
         if (loadedFXNames_.count(name)) continue;
 
-        std::string abs = e.path().string();
-        int sz = 0;
-        char* content = file_read(abs.c_str(), &sz);
-        if (!content || sz <= 0) continue;
+        // editor::file_io::readText — STL-based read, works on OneDrive
+        // Documents files where motor file_read fails silently.
+        std::string abs = e.path().generic_string();
+        std::string content = editor::file_io::readText(abs);
+        if (content.empty()) continue;
 
-        // `fx_load_from_mem` STRDUPs the nameid for `passfx.name`, so a
-        // stack-local c_str() would be fine — but mirror the engine's
-        // own `fx_load` convention (which keeps a heap STRDUP in the
-        // dedupe-set) so the nameid stays valid for later set-lookup
-        // inside the motor.
-        char* nameHeap = STRDUP(name.c_str());
-        int slot = fx_load_from_mem(nameHeap, content);
+        // STRDUP both the nameid AND the content — the motor's
+        // `postfx_load_from_mem` is opaque about whether it copies the
+        // content buffer; the previous motor `file_read` returned a
+        // rotating slot buffer, so the motor MUST have been copying.
+        // Keep the heap-STRDUP convention to be safe; 28 × ~1 KB ≈ 30 KB,
+        // and these only load once per editor session.
+        char* nameHeap    = STRDUP(name.c_str());
+        char* contentHeap = STRDUP(content.c_str());
+        int slot = fx_load_from_mem(nameHeap, contentHeap);
         if (slot >= 0) {
             loadedFXNames_.insert(std::move(name));
             ++loaded;
@@ -904,9 +910,8 @@ obj* EditorApp::createScript(const char* script_path, obj* parent) {
 
 void EditorApp::spawnPrefab(const char* path) {
     if (!path || !*path) return;
-    int size = 0;
-    char* content = file_read(path, &size);
-    if (!content) {
+    std::string content = editor::file_io::readText(path);
+    if (content.empty()) {
         if (console_) console_->log(std::string("[Prefab] read failed: ") + path);
         return;
     }

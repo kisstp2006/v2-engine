@@ -13,6 +13,7 @@
 #endif
 
 #include "gltf_asset_extractor.h"
+#include "../core/file_io.h"
 #include "../persistence/material_asset_io.h"
 
 namespace editor::gltf_asset_extractor {
@@ -125,11 +126,11 @@ std::string extractImage(cgltf_image* img,
                 return "";
             }
         } else {
-            // Decode + re-encode. Read whole file → stbi.
-            int sz = 0;
-            char* raw = file_read(src.string().c_str(), &sz);
-            if (!raw || sz <= 0 ||
-                !writePngFromBytes((const uint8_t*)raw, sz, outFile)) {
+            // Decode + re-encode. STL-based readBytes works on every path
+            // motor file_read could fail on (OneDrive online-only, etc.).
+            std::vector<uint8_t> raw = editor::file_io::readBytes(src.string());
+            if (raw.empty() ||
+                !writePngFromBytes(raw.data(), (int)raw.size(), outFile)) {
                 if (warnings) {
                     warnings->push_back(std::string(
                         "decode/encode failed for external image: ") +

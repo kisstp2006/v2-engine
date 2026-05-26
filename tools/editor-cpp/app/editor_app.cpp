@@ -21,6 +21,7 @@
 #include "../panels/panel.h"
 #include "../panels/console_panel.h"
 #include "../components/components_api.h"
+#include "../core/profile_scope.h"
 #include "../persistence/scene_io.h"
 #include "../persistence/postfx_state_io.h"
 #include "../persistence/material_asset_io.h"
@@ -429,6 +430,16 @@ obj* EditorApp::createPostFXStack(obj* parent) {
     selection_.setPrimary(n);
     commands_.execute(std::make_unique<AddNodeCommand>(p, n, "Add PostFX Stack"));
     if (console_) console_->log("Created: PostFX Stack");
+    return n;
+}
+
+obj* EditorApp::createShadowSettings(obj* parent) {
+    obj* p = parent ? parent : ensureRoot();
+    if (!p) return nullptr;
+    obj* n = editor_obj_new_shadow_settings(p, "ShadowSettings");
+    selection_.setPrimary(n);
+    commands_.execute(std::make_unique<AddNodeCommand>(p, n, "Add ShadowSettings"));
+    if (console_) console_->log("Created: ShadowSettings");
     return n;
 }
 
@@ -1111,6 +1122,7 @@ void EditorApp::drawMenubar() {
             if (ImGui::MenuItem("Fog")) createFogSettings();
             if (ImGui::MenuItem("Skybox (empty path)")) createSkybox("");
             if (ImGui::MenuItem("PostFX Stack")) createPostFXStack();
+            if (ImGui::MenuItem("Shadow Settings")) createShadowSettings();
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("UI")) {
@@ -1192,6 +1204,7 @@ void EditorApp::drawMenubar() {
 }
 
 void EditorApp::drawFrame() {
+    EDITOR_PROFILE("Editor.Frame.Total");
     ImGuizmo_BeginFrame();
 
     // Phase 5a — background-tasks (cook worker) → main-thread drain.
@@ -1232,10 +1245,35 @@ void EditorApp::drawFrame() {
     // the scene-basename can be of interest).
     refreshWindowTitle();
 
-    drawMenubar();
-    drawDockHost();
-    for (auto& p : panels_) {
-        p->draw(*this);
+    {
+        EDITOR_PROFILE("Editor.Frame.Menubar");
+        drawMenubar();
+    }
+    {
+        EDITOR_PROFILE("Editor.Frame.DockHost");
+        drawDockHost();
+    }
+    {
+        EDITOR_PROFILE("Editor.Frame.Panels");
+        // Per-panel timings: we want individual numbers (Editor.Panel.scene,
+        // Editor.Panel.inspector, ...) so the user can see which panel
+        // dominates the ImGui-side cost. Cache the assembled "Editor.Panel.<id>"
+        // strings per panel-id (one std::string lives for the editor's
+        // lifetime — the profile map stores pointers and a static lifetime
+        // is exactly what we need). The map is constructed lazily.
+        static std::unordered_map<std::string, std::string> panel_label_cache;
+        for (auto& p : panels_) {
+            const std::string& pid = p->id();
+            auto labelIt = panel_label_cache.find(pid);
+            if (labelIt == panel_label_cache.end()) {
+                labelIt = panel_label_cache.emplace(
+                    pid, std::string("Editor.Panel.") + pid).first;
+            }
+            uint64_t t0 = time_us();
+            p->draw(*this);
+            double dt = (double)(time_us() - t0);
+            editor_profile_record_us(labelIt->second.c_str(), dt);
+        }
     }
 
     // Phase 5c — pre-cook validation modal (top-layer).

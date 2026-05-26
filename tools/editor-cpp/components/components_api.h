@@ -155,6 +155,17 @@ API const char* editor_skybox_sky_path (const struct obj* o);
 API const char* editor_skybox_refl_path(const struct obj* o);
 API const char* editor_skybox_env_path (const struct obj* o);
 
+// New ShadowSettings node — scene-wide singleton mirroring the motor's
+// `shadowmap_t` global parameters. The Scene/Game render-walks find the
+// first ShadowSettings node in the scene and call
+// editor_shadow_settings_apply on the panel's shadowmap_t before
+// `shadowmap_begin` each frame.
+API struct obj* editor_obj_new_shadow_settings(struct obj* parent, const char* name);
+API int          editor_obj_is_shadow_settings   (const struct obj* o);
+// Apply the ShadowSettings to a `shadowmap_t*` (void* to avoid pulling the
+// render-header into this API surface). No-op if `o` is not a ShadowSettings.
+API void         editor_shadow_settings_apply(const struct obj* o, void* out_sm);
+
 // New PostFXStack node — scene-wide singleton holding post-process pipeline
 // parameters. The 3D Scene / Game render-walks wrap the world-render in
 // fx_begin/end when this node exists and `enabled` is true.
@@ -259,6 +270,24 @@ API vec3* editor_obj_scale_addr          (struct obj* o);
 
 // Universal pos-pointer for every Transform-style component. NULL if absent.
 API vec3* editor_obj_pos_addr(struct obj* o);
+
+// ---- Profiler helper (editor_profiler.c) ----------------------------------
+// Thin wrapper around the motor's `profiler` map; the panel-side reads it
+// via these snapshot functions, and the render-walk inserts samples via
+// editor_profile_record_us (driven from a RAII ProfileScope in C++ code).
+typedef struct editor_profile_entry_t {
+    const char* name;
+    float       avg_ms;     // EMA timer cost; 0 for non-timer entries
+    double      stat;       // counter value (profile_incstat / setstat); NaN for timers
+    int         is_timer;   // 1 if `avg_ms` is meaningful, 0 if `stat` is
+} editor_profile_entry_t;
+
+API void editor_profile_record_us       (const char* name, double us);
+API void editor_profile_set_counter     (const char* name, double value);
+API int  editor_profiler_count          (void);
+API int  editor_profiler_collect        (editor_profile_entry_t* out, int max_count);
+API void editor_profiler_reset_counters (void);
+API void editor_profiler_clear          (void);
 
 // `obj_children(parent)` returns an `array(obj*)*` where child[0] is the
 // parent's own parent (back-pointer) and child[1..] are the real children.

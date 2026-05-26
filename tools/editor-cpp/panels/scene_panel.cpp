@@ -20,6 +20,9 @@
 #include "../app/panel_registry.h"
 #include "../commands/command.h"
 #include "../components/components_api.h"
+#include "../core/event_bus.h"
+#include "../core/events.h"
+#include "../core/profile_scope.h"
 #include "../core/selection_service.h"
 #include "../persistence/material_override_io.h"
 #include "../runtime/script_host.h"
@@ -118,6 +121,17 @@ static obj* findSkyboxNode(obj* node) {
     int n = editor_obj_child_count(node);
     for (int i = 0; i < n; ++i) {
         obj* r = findSkyboxNode(editor_obj_child_at(node, i));
+        if (r) return r;
+    }
+    return nullptr;
+}
+
+static obj* findShadowSettings(obj* node) {
+    if (!node) return nullptr;
+    if (editor_obj_is_shadow_settings(node)) return node;
+    int n = editor_obj_child_count(node);
+    for (int i = 0; i < n; ++i) {
+        obj* r = findShadowSettings(editor_obj_child_at(node, i));
         if (r) return r;
     }
     return nullptr;
@@ -260,90 +274,144 @@ void ScenePanel::renderMeshNode(obj* node, EditorApp& app,
 
     // Phase 4a — render-time abs-resolve. The stored path is project-relative,
     // but the motor's `model()` / `is_file()` expect absolute. The cache-key is abs.
-    std::string absPath = asset_path::toAbsolute(relPath, app.projectPath());
+    // OPTIMIZATION: asset_path::toAbsolute internally calls
+    // fs::weakly_canonical() — a real Windows syscall (~170 μs each). We cache
+    // the (relPath → absPath) leap per `obj*` and skip the syscall as long
+    // as the source relPath hasn't changed. Auto-invalidating: a different
+    // relPath string mismatches → we recompute.
+    std::string absPath;
+    {
+        EDITOR_PROFILE("Editor.Scene.Mesh.PathResolve");
+        auto pcIt = pathCache_.find(node);
+        if (pcIt != pathCache_.end() && pcIt->second.rel == relPath) {
+            absPath = pcIt->second.abs;
+        } else {
+            absPath = asset_path::toAbsolute(relPath, app.projectPath());
+            pathCache_[node] = PathCacheEntry{relPath, absPath};
+        }
+    }
     const std::string& path = absPath;
 
-    // FailedPaths timeout — if the user replaced the file on disk,
-    // retry after 2 seconds. Mtime-poll: if the file's mtime has changed
-    // (e.g. a new .iqm), cache-evict.
+    // FailedPaths timeout: if the user moved/deleted the file, we already
+    // know it failed recently — bail without re-stat-ing.
     if (failedPaths_.isFresh(path)) return;
-    failedPaths_.erase(path);
-    if (!is_file(path.c_str())) {
-        failedPaths_.insert(path);
-        app.bus().emit("log", std::string("[Mesh] file not found: ") + relPath);
-        return;
-    }
 
-    uint64_t mt_now = mtimeNs(path);
-    auto mt_it = modelMtimes_.find(path);
-    if (mt_it != modelMtimes_.end() && mt_it->second != mt_now) {
-        modelCache_.erase(path);
-        app.bus().emit("log", std::string("[Mesh] reloaded (mtime): ") + relPath);
-    }
-
-    auto it = modelCache_.find(path);
-    if (it == modelCache_.end()) {
-        model_t mt = model(path.c_str(), 0);
-        if (!mt.iqm) {
+    // OPTIMIZATION: only stat the file when the cache has no entry. A path
+    // that's already in modelCache_ was successfully loaded earlier, so
+    // file existence is implicit. The mtime-poll below (inside CacheLookup)
+    // is the canonical way to detect on-disk changes — and that's also a
+    // single stat, not two. Previous code did is_file() + mtimeNs() EVERY
+    // frame on EVERY mesh: 12 meshes × 2 stat() syscalls × 60fps ≈ 1440 stat/s
+    // on Windows — costed ~3-4 ms per frame just to confirm files we
+    // already loaded still exist.
+    if (modelCache_.find(path) == modelCache_.end()) {
+        EDITOR_PROFILE("Editor.Scene.Mesh.IsFileCheck");
+        failedPaths_.erase(path);
+        if (!is_file(path.c_str())) {
             failedPaths_.insert(path);
-            app.bus().emit("log", std::string("[Mesh] load failed: ") + relPath);
+            app.bus().emit("log",
+                std::string("[Mesh] file not found: ") + relPath);
             return;
         }
-        auto ins = modelCache_.emplace(path, mt);
-        it = ins.first;
-        modelMtimes_[path] = mt_now;
-        app.bus().emit("log", std::string("[Mesh] loaded: ") + relPath);
+    } else {
+        // Cached path → clear any stale failedPaths entry (idempotent).
+        failedPaths_.erase(path);
     }
 
-    // Feed the lights + shadowmap to the model before render
-    // (`model_light/shadow` expects a non-const pointer).
-    if (!lights.empty()) {
-        model_light(&it->second, (unsigned)lights.size(),
-                    const_cast<light_t*>(lights.data()));
-    } else {
-        model_light(&it->second, 0, nullptr);
-    }
-    // Shadowmap pipeline disabled → we always pass nullptr.
-    model_shadow(&it->second, nullptr);
-    (void)lights;
+    // Per-frame mesh tracking for the Profiler. Insert AFTER the existence
+    // gate so missing-file ghosts don't inflate the counts. We track BEFORE
+    // any cache lookup or render work, so the count is "how many meshes
+    // the walk actually attempted this frame".
+    ++frameMeshCount_;
+    frameModelPaths_.insert(path);
 
-    // Per-frame fog uniforms. shader2_adduniforms dedupes on type_name so this
-    // doesn't grow the model's uniform array.
-    if (fogNode) {
-        int mode = 0; vec3 color = {0,0,0};
-        float start = 0.f, end = 1.f, density = 0.f;
-        editor_fog_settings_get(fogNode, &mode, &color, &start, &end, &density);
-        model_fog(&it->second, (unsigned)mode, color, start, end, density);
-    } else {
-        // No scene-wide FogSettings → explicitly disable fog (the model may
-        // have been cached with a previous setup).
-        vec3 black = {0,0,0};
-        model_fog(&it->second, 0u, black, 0.f, 1.f, 0.f);
+    // Cache lookup + mtime poll + (cold path) load. Counts how much we pay
+    // just to acquire the cached model_t pointer per mesh per frame.
+    std::unordered_map<std::string, model_t>::iterator it;
+    {
+        EDITOR_PROFILE("Editor.Scene.Mesh.CacheLookup");
+        uint64_t mt_now = mtimeNs(path);
+        auto mt_it = modelMtimes_.find(path);
+        if (mt_it != modelMtimes_.end() && mt_it->second != mt_now) {
+            modelCache_.erase(path);
+            app.bus().emit("log", std::string("[Mesh] reloaded (mtime): ") + relPath);
+        }
+
+        it = modelCache_.find(path);
+        if (it == modelCache_.end()) {
+            model_t mt = model(path.c_str(), 0);
+            if (!mt.iqm) {
+                failedPaths_.insert(path);
+                app.bus().emit("log", std::string("[Mesh] load failed: ") + relPath);
+                return;
+            }
+            auto ins = modelCache_.emplace(path, mt);
+            it = ins.first;
+            modelMtimes_[path] = mt_now;
+            app.bus().emit("log", std::string("[Mesh] loaded: ") + relPath);
+        }
     }
-    // Skybox / IBL — bind the resolved skybox_t to the model (empty if no
-    // Skybox node, which resets the PBR shader's HAS_TEX_SKY* uniforms).
-    if (sky) {
-        model_skybox(&it->second, *sky);
-    } else {
-        skybox_t empty = {0};
-        model_skybox(&it->second, empty);
+
+    // Engine-side uniform bind: lights UBO + shadow texture + fog block +
+    // skybox/IBL textures. These all happen BEFORE the actual draw call, and
+    // each one fires a chain of `uniform_set2` + `shader2_adduniforms` work.
+    // Tracked separately from ModelRender so we can tell whether the cost is
+    // in the prep or in the GL draw itself.
+    {
+        EDITOR_PROFILE("Editor.Scene.Mesh.UniformPrep");
+        if (!lights.empty()) {
+            model_light(&it->second, (unsigned)lights.size(),
+                        const_cast<light_t*>(lights.data()));
+        } else {
+            model_light(&it->second, 0, nullptr);
+        }
+        model_shadow(&it->second, sm_init_ ? &sm_ : nullptr);
+
+        if (fogNode) {
+            int mode = 0; vec3 color = {0,0,0};
+            float start = 0.f, end = 1.f, density = 0.f;
+            editor_fog_settings_get(fogNode, &mode, &color, &start, &end, &density);
+            model_fog(&it->second, (unsigned)mode, color, start, end, density);
+        } else {
+            vec3 black = {0,0,0};
+            model_fog(&it->second, 0u, black, 0.f, 1.f, 0.f);
+        }
+        if (sky) {
+            model_skybox(&it->second, *sky);
+        } else {
+            skybox_t empty = {0};
+            model_skybox(&it->second, empty);
+        }
     }
+
     // Material overrides (Blokk 2.5) — per-slot asset-ref + inline overlay.
-    material_override_io::applyOverridesToModel(
-        node, &it->second, app.projectPath());
+    // Cache: skip the ~1.5 KB struct-copy + name-match work if THIS node
+    // already had its overrides applied to its model since the last scene
+    // mutation. `overridesApplied_` is cleared by the bus handlers above
+    // on any kEvtSceneDirty et al., so an Inspector edit re-triggers on
+    // the next frame.
+    if (overridesApplied_.find(node) == overridesApplied_.end()) {
+        EDITOR_PROFILE("Editor.Scene.Mesh.MaterialOverrides");
+        material_override_io::applyOverridesToModel(
+            node, &it->second, app.projectPath());
+        overridesApplied_.insert(node);
+    }
 
     mat44 pivot;
-    editor_mesh_renderer_compose_pivot(node, pivot);
-    // Skinned-glTF X+Y flip compensation (= 180° around Z): the loader
-    // leaves the vertex in glTF-native space so the skinning math is clean,
-    // and we apply the same flip here on the model pivot instead.
-    if (it->second.flags & MODEL_GLTF_SKINNED) {
-        mat44 zrot180; id44(zrot180); zrot180[0] = -1.0f; zrot180[5] = -1.0f;
-        mat44 tmp; multiply44x2(tmp, pivot, zrot180);
-        memcpy(pivot, tmp, sizeof(mat44));
+    {
+        EDITOR_PROFILE("Editor.Scene.Mesh.PivotCompose");
+        editor_mesh_renderer_compose_pivot(node, pivot);
+        if (it->second.flags & MODEL_GLTF_SKINNED) {
+            mat44 zrot180; id44(zrot180); zrot180[0] = -1.0f; zrot180[5] = -1.0f;
+            mat44 tmp; multiply44x2(tmp, pivot, zrot180);
+            memcpy(pivot, tmp, sizeof(mat44));
+        }
     }
     // pass = -1 → every default pass (lighting, shading, shadow-sampling).
-    model_render(&it->second, cam_.proj, cam_.view, &pivot, 1, -1);
+    {
+        EDITOR_PROFILE("Editor.Scene.Mesh.ModelRender");
+        model_render(&it->second, cam_.proj, cam_.view, &pivot, 1, -1);
+    }
 }
 
 void ScenePanel::renderMeshShadowOnly(obj* node, EditorApp& app) {
@@ -352,51 +420,178 @@ void ScenePanel::renderMeshShadowOnly(obj* node, EditorApp& app) {
     std::string absPath = asset_path::toAbsolute(relPath, app.projectPath());
     if (failedPaths_.isFresh(absPath)) return;
     auto it = modelCache_.find(absPath);
-    if (it == modelCache_.end()) return;   // model not yet cached
+    if (it == modelCache_.end()) return;   // model not yet cached (next frame)
     mat44 pivot;
     editor_mesh_renderer_compose_pivot(node, pivot);
+    // Same skinned-glTF flip as the main render-walk, otherwise the shadow
+    // silhouette wouldn't match the visible mesh.
+    if (it->second.flags & MODEL_GLTF_SKINNED) {
+        mat44 zrot180; id44(zrot180); zrot180[0] = -1.0f; zrot180[5] = -1.0f;
+        mat44 tmp; multiply44x2(tmp, pivot, zrot180);
+        memcpy(pivot, tmp, sizeof(mat44));
+    }
     model_render(&it->second, cam_.proj, cam_.view, &pivot, 1,
                  RENDER_PASS_SHADOW);
 }
 
 void ScenePanel::walkShadowPass(obj* node, EditorApp& app) {
-    if (!node) return;
-    if (editor_obj_is_mesh_renderer(node)) {
-        renderMeshShadowOnly(node, app);
+    // Plan B Phase 1: batched shadow pass. Called once per cubemap face by
+    // the shadowmap_step loop. We bind the shadow shader + face uniforms +
+    // renderstate ONCE here, then loop meshNodes_ doing only the per-mesh
+    // MODEL/MV uniforms + VAO bind + glDraw. The motor's `model_render`
+    // overhead drops from ~500 μs / mesh to ~50 μs / mesh.
+    //
+    // FALLBACK: skinned-glTF meshes go through the old per-mesh path
+    // because the batch doesn't handle the bone-UBO upload yet (Phase 3).
+    (void)node;
+    if (meshNodes_.empty()) return;
+
+    // Find a prototype model — the first compatible cached mesh. The
+    // prototype provides the shadow shader handle + cached uniform_t
+    // structs the batch uses.
+    model_t* proto = nullptr;
+    for (obj* m : meshNodes_) {
+        auto pcIt = pathCache_.find(m);
+        if (pcIt == pathCache_.end()) continue;
+        auto mcIt = modelCache_.find(pcIt->second.abs);
+        if (mcIt == modelCache_.end()) continue;
+        if (ShadowBatch::isCompatible(&mcIt->second)) {
+            proto = &mcIt->second;
+            break;
+        }
     }
-    int n = editor_obj_child_count(node);
-    for (int i = 0; i < n; ++i) {
-        walkShadowPass(editor_obj_child_at(node, i), app);
+    if (!proto) {
+        // Nothing compatible — fall back to the old per-mesh path.
+        for (obj* m : meshNodes_) renderMeshShadowOnly(m, app);
+        return;
     }
+
+    shadow_batch_.beginFace(proto, &sm_, cam_.proj, cam_.view);
+    int batched = 0, fellback = 0;
+    for (obj* m : meshNodes_) {
+        auto pcIt = pathCache_.find(m);
+        if (pcIt == pathCache_.end()) continue;
+        auto mcIt = modelCache_.find(pcIt->second.abs);
+        if (mcIt == modelCache_.end()) continue;
+
+        mat44 pivot;
+        editor_mesh_renderer_compose_pivot(m, pivot);
+
+        if (ShadowBatch::isCompatible(&mcIt->second)) {
+            shadow_batch_.draw(&mcIt->second, pivot);
+            ++batched;
+        } else {
+            // Skinned / incompatible — slow path. Must end the batch first
+            // because the per-mesh path may bind a different shader (the
+            // skinned-glTF case rebinds the same shader_info[1] but goes
+            // through model_render's full setup).
+            shadow_batch_.endFace();
+            if (mcIt->second.flags & MODEL_GLTF_SKINNED) {
+                mat44 zrot180; id44(zrot180);
+                zrot180[0] = -1.0f; zrot180[5] = -1.0f;
+                mat44 tmp; multiply44x2(tmp, pivot, zrot180);
+                memcpy(pivot, tmp, sizeof(mat44));
+            }
+            model_render(&mcIt->second, cam_.proj, cam_.view, &pivot, 1,
+                         RENDER_PASS_SHADOW);
+            shadow_batch_.beginFace(proto, &sm_, cam_.proj, cam_.view);
+            ++fellback;
+        }
+    }
+    shadow_batch_.endFace();
+
+    // Per-face counters — updated each face but only the LAST one ends
+    // up in the EMA / counter slot. For 6 faces × identical mesh set,
+    // they all see the same numbers, so this is fine for diagnostics.
+    editor_profile_set_counter("Editor.Shadow.BatchPerFace",    (double)batched);
+    editor_profile_set_counter("Editor.Shadow.FallbackPerFace", (double)fellback);
 }
 
 void ScenePanel::collectLights(obj* node, std::vector<light_t>& out) {
-    if (!node) return;
-    if (editor_obj_is_light_ref(node)) {
+    // Flat-list path: iterate the cached lightNodes_ instead of walking the
+    // tree. Tree mutation events (kEvtSceneDirty / kEvtSceneReplaced) flip
+    // flatListsDirty_, which triggers a rebuild before this is called.
+    (void)node;  // kept for ABI compatibility; we use the cached list.
+    out.reserve(lightNodes_.size());
+    for (obj* n : lightNodes_) {
         light_t l;
-        editor_light_ref_to_light_t(node, &l);
+        editor_light_ref_to_light_t(n, &l);
         out.push_back(l);
     }
-    int n = editor_obj_child_count(node);
-    for (int i = 0; i < n; ++i) {
-        collectLights(editor_obj_child_at(node, i), out);
+}
+
+// One-time bus subscription: any scene mutation (Inspector edit, gizmo drag,
+// AddNode, etc.) sets flatListsDirty_, so the next frame rebuilds. Wired
+// lazily on first renderScene since EditorApp isn't available at ctor time.
+void ScenePanel::wireBusIfNeeded_(EditorApp& app) {
+    if (busWired_) return;
+    busWired_ = true;
+    // Any scene mutation invalidates both caches: (a) flat node lists,
+    // because nodes might have been added / removed / reparented; and
+    // (b) the MaterialOverrides per-node "is applied?" set, because the
+    // edit might have changed an override field on any mesh.
+    auto invalidateAll = [this](const std::any&){
+        flatListsDirty_ = true;
+        overridesApplied_.clear();
+    };
+    app.bus().on(kEvtSceneDirty,    invalidateAll);
+    app.bus().on(kEvtSceneReplaced, invalidateAll);
+    app.bus().on(kEvtNodeAdded,     invalidateAll);
+    app.bus().on(kEvtNodeRemoved,   invalidateAll);
+}
+
+// Recursive walk that fills meshNodes_ + lightNodes_ from the scene tree.
+// Only runs on tree mutation — render frames iterate the flat lists.
+void ScenePanel::rebuildFlatLists_(obj* root) {
+    meshNodes_.clear();
+    lightNodes_.clear();
+    // Local recursion via a hand-rolled stack (avoids a separate helper).
+    std::vector<obj*> stack;
+    if (root) stack.push_back(root);
+    while (!stack.empty()) {
+        obj* n = stack.back();
+        stack.pop_back();
+        if (editor_obj_is_mesh_renderer(n)) meshNodes_.push_back(n);
+        else if (editor_obj_is_light_ref(n)) lightNodes_.push_back(n);
+        int cnt = editor_obj_child_count(n);
+        for (int i = 0; i < cnt; ++i) {
+            if (obj* c = editor_obj_child_at(n, i)) stack.push_back(c);
+        }
     }
+    flatListsDirty_ = false;
 }
 
 void ScenePanel::walkAndRender(obj* node, EditorApp& app,
                                const std::vector<light_t>& lights,
                                obj* fogNode, skybox_t* sky) {
-    if (!node) return;
-    if (editor_obj_is_mesh_renderer(node)) {
-        renderMeshNode(node, app, lights, fogNode, sky);
-    }
-    int n = editor_obj_child_count(node);
-    for (int i = 0; i < n; ++i) {
-        walkAndRender(editor_obj_child_at(node, i), app, lights, fogNode, sky);
+    // Flat-list path: linear iteration over meshNodes_ instead of the
+    // recursive tree walk. The WalkRecurse scope is gone — its cost
+    // (~2.8 ms) was the child_count+child_at chain on ~42 nodes per frame.
+    // The `node` parameter is kept for ABI but unused on this path.
+    (void)node;
+    EDITOR_PROFILE("Editor.Scene.WalkRecurse");
+    for (obj* m : meshNodes_) {
+        renderMeshNode(m, app, lights, fogNode, sky);
     }
 }
 
 void ScenePanel::renderScene(int w, int h, bool inputAllowed, EditorApp& app) {
+    EDITOR_PROFILE("Editor.Scene.Total");
+
+    // Reset per-frame mesh tracking before the walk. renderMesh inserts into
+    // frameModelPaths_; the published counter at the end reflects how many
+    // unique .iqm/.gltf files we actually saw this frame.
+    frameModelPaths_.clear();
+    frameMeshCount_ = 0;
+
+    // Subscribe to scene-mutation events once. Each rebuild walks the tree
+    // exactly ONE time and stores meshNodes_ / lightNodes_ flat lists.
+    wireBusIfNeeded_(app);
+    if (flatListsDirty_) {
+        EDITOR_PROFILE("Editor.Scene.RebuildFlatLists");
+        rebuildFlatLists_(app.scene().root());
+    }
+
     editorFreefly(&cam_, !inputAllowed);
 
     fbo_bind(fbo_.id);
@@ -412,11 +607,60 @@ void ScenePanel::renderScene(int w, int h, bool inputAllowed, EditorApp& app) {
 
     // 1) light gathering.
     std::vector<light_t> lights;
-    collectLights(app.scene().root(), lights);
+    {
+        EDITOR_PROFILE("Editor.Scene.CollectLights");
+        collectLights(app.scene().root(), lights);
+    }
 
-    // 2) shadowmap pass — DISABLED (motor pipeline crashes). The LightRef's
-    // `cast_shadows` field is handed to the motor as hardcoded false by
-    // `editor_light_ref_to_light_t`, so shadowmap_* doesn't run here either. Fix in M16+.
+    // 2) shadowmap pass — runs iff at least one light has cast_shadows=1.
+    // Mirrors demos/16-shadows.c:238-249. shadowmap_begin saves the current
+    // FBO + viewport (= the editor FBO bound on line 402), shadowmap_end
+    // restores them, so the subsequent fx_begin / world render still lands
+    // in the editor FBO. Failing model_render calls during the shadow loop
+    // are no-ops (motor sets `skip_render` on degenerate cascade steps),
+    // and renderMeshShadowOnly bails early for not-yet-cached models.
+    bool any_caster = false;
+    for (const auto& l : lights) {
+        if (l.cast_shadows) { any_caster = true; break; }
+    }
+    if (any_caster) {
+        EDITOR_PROFILE("Editor.Scene.ShadowPass");
+        if (!sm_init_) {
+            sm_ = shadowmap();
+            sm_init_ = true;
+        }
+        // Apply scene-wide ShadowSettings (vsm/csm resolution, cascade-split
+        // lambda, PCF filter size, etc.) if present. shadowmap_begin picks up
+        // the new sizes; filter/window changes trigger an internal rebuild.
+        bool shadowNodeFound = false;
+        if (obj* shadowNode = findShadowSettings(app.scene().root())) {
+            editor_shadow_settings_apply(shadowNode, &sm_);
+            shadowNodeFound = true;
+        }
+
+        // Debug counters: publish to Profiler so we can verify the apply
+        // actually took effect. AppliedResolution should match the value
+        // typed into the ShadowSettings node Inspector; NumShadowCasters
+        // shows how many lights are doing a full shadow pass this frame.
+        editor_profile_set_counter("Editor.Shadow.AppliedResolution",
+                                   (double)sm_.vsm_texture_width);
+        editor_profile_set_counter("Editor.Shadow.ShadowSettingsFound",
+                                   shadowNodeFound ? 1.0 : 0.0);
+        int caster_count = 0;
+        for (const auto& l : lights) if (l.cast_shadows) ++caster_count;
+        editor_profile_set_counter("Editor.Shadow.NumShadowCasters",
+                                   (double)caster_count);
+
+        shadowmap_begin(&sm_);
+        for (size_t i = 0; i < lights.size(); ++i) {
+            if (!lights[i].cast_shadows) continue;
+            while (shadowmap_step(&sm_)) {
+                shadowmap_light(&sm_, &lights[i], cam_.proj, cam_.view);
+                walkShadowPass(app.scene().root(), app);
+            }
+        }
+        shadowmap_end(&sm_);
+    }
 
     // 3) main render pass — with lights + shadowmap + fog + skybox/IBL.
     obj* fogNode = findFogSettings(app.scene().root());
@@ -447,7 +691,10 @@ void ScenePanel::renderScene(int w, int h, bool inputAllowed, EditorApp& app) {
         if (render_bg) skybox_render(sky, cam_.proj, cam_.view);
     }
 
-    walkAndRender(app.scene().root(), app, lights, fogNode, sky);
+    {
+        EDITOR_PROFILE("Editor.Scene.WalkAndRender");
+        walkAndRender(app.scene().root(), app, lights, fogNode, sky);
+    }
 
     // 3D label pass — Text3DRenderer nodes drawn in world-space via ddraw_text.
     drawText3DOverlays_scene(app.scene().root());
@@ -469,6 +716,15 @@ void ScenePanel::renderScene(int w, int h, bool inputAllowed, EditorApp& app) {
     drawTextOverlays_scene(app.scene().root());
 
     fbo_unbind();
+
+    // Publish per-frame mesh counters into the Profiler panel. Both numbers
+    // are reset at the start of the next renderScene. Ratio = duplication
+    // factor: MeshCount=20, UniqueModels=4 → instancing would collapse to 4
+    // draw "sessions" (huge win); MeshCount=20, UniqueModels=20 → no win.
+    editor_profile_set_counter("Editor.Scene.MeshCount",
+                               (double)frameMeshCount_);
+    editor_profile_set_counter("Editor.Scene.UniqueModels",
+                               (double)frameModelPaths_.size());
 }
 
 void ScenePanel::draw(EditorApp& app) {

@@ -32,12 +32,21 @@ private:
     void walkAndRenderMeshes(obj* node, EditorApp& app, camera_t& cam,
                              const std::vector<light_t>& lights,
                              obj* fogNode, skybox_t* sky);
+    // M16 — shadowmap shadow-caster pass. Walks the scene tree and re-renders
+    // every cached MeshRenderer through model's RENDER_PASS_SHADOW path. Not-yet-
+    // cached models are silently skipped (next frame's main pass loads them).
+    void renderMeshShadowOnly(obj* node, camera_t& cam, EditorApp& app);
+    void walkShadowPass(obj* node, camera_t& cam, EditorApp& app);
     // Resolve the scene's Skybox node into a cached skybox_t* (or nullptr).
     skybox_t* resolveSkybox(EditorApp& app);
 
     fbo_t fbo_{};
     int   width_  = 0;
     int   height_ = 0;
+
+    // Shadowmap (lazy-init on first frame with at least one shadow caster).
+    shadowmap_t sm_{};
+    bool        sm_init_ = false;
 
     std::unordered_map<std::string, model_t>   modelCache_;
     std::unordered_map<std::string, texture_t> textureCache_;

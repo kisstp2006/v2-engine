@@ -16,6 +16,7 @@
 #include "../app/editor_app.h"
 #include "../app/panel_registry.h"
 #include "../components/components_api.h"
+#include "../core/profile_scope.h"
 #include "../persistence/material_override_io.h"
 #include "../runtime/script_host.h"
 #include "../scene/scene_helpers.h"
@@ -27,6 +28,10 @@ GamePanel::~GamePanel() {
     if (fbo_.id) {
         fbo_destroy(fbo_);
         fbo_ = fbo_t{};
+    }
+    if (sm_init_) {
+        shadowmap_destroy(&sm_);
+        sm_init_ = false;
     }
     for (auto& kv : skyboxCache_) skybox_destroy(&kv.second);
     skyboxCache_.clear();
@@ -85,6 +90,17 @@ static obj* findSkyboxNode(obj* node) {
     int n = editor_obj_child_count(node);
     for (int i = 0; i < n; ++i) {
         obj* r = findSkyboxNode(editor_obj_child_at(node, i));
+        if (r) return r;
+    }
+    return nullptr;
+}
+
+static obj* findShadowSettings(obj* node) {
+    if (!node) return nullptr;
+    if (editor_obj_is_shadow_settings(node)) return node;
+    int n = editor_obj_child_count(node);
+    for (int i = 0; i < n; ++i) {
+        obj* r = findShadowSettings(editor_obj_child_at(node, i));
         if (r) return r;
     }
     return nullptr;
@@ -262,7 +278,7 @@ void GamePanel::walkAndRenderMeshes(obj* node, EditorApp& app, camera_t& cam,
                 } else {
                     model_light(&it->second, 0, nullptr);
                 }
-                model_shadow(&it->second, nullptr);
+                model_shadow(&it->second, sm_init_ ? &sm_ : nullptr);
                 // Per-frame fog uniforms. shader2_adduniforms (render_shader2.h:579)
                 // dedupes on type_name so this won't grow the uniform array.
                 if (fogNode) {
@@ -312,7 +328,39 @@ void GamePanel::walkAndRenderMeshes(obj* node, EditorApp& app, camera_t& cam,
     }
 }
 
+void GamePanel::renderMeshShadowOnly(obj* node, camera_t& cam, EditorApp& app) {
+    const char* relPath = editor_mesh_renderer_path(node);
+    if (!relPath || !*relPath) return;
+    std::string absPath = asset_path::toAbsolute(relPath, app.projectPath());
+    if (failedPaths_.isFresh(absPath)) return;
+    auto it = modelCache_.find(absPath);
+    if (it == modelCache_.end()) return;   // not yet cached (next frame picks up)
+    mat44 pivot;
+    editor_mesh_renderer_compose_pivot(node, pivot);
+    // Match the main-pass skinned-glTF flip so the cast shadow matches the
+    // visible silhouette.
+    if (it->second.flags & MODEL_GLTF_SKINNED) {
+        mat44 zrot180; id44(zrot180); zrot180[0] = -1.0f; zrot180[5] = -1.0f;
+        mat44 tmp; multiply44x2(tmp, pivot, zrot180);
+        memcpy(pivot, tmp, sizeof(mat44));
+    }
+    model_render(&it->second, cam.proj, cam.view, &pivot, 1,
+                 RENDER_PASS_SHADOW);
+}
+
+void GamePanel::walkShadowPass(obj* node, camera_t& cam, EditorApp& app) {
+    if (!node) return;
+    if (editor_obj_is_mesh_renderer(node)) {
+        renderMeshShadowOnly(node, cam, app);
+    }
+    int n = editor_obj_child_count(node);
+    for (int i = 0; i < n; ++i) {
+        walkShadowPass(editor_obj_child_at(node, i), cam, app);
+    }
+}
+
 void GamePanel::renderWithCamera(obj* cameraNode, int w, int h, EditorApp& app) {
+    EDITOR_PROFILE("Editor.Game.Total");
     // CameraRef params → camera_t.
     vec3 pos, dir;
     float fov, nclip, fclip;
@@ -336,8 +384,38 @@ void GamePanel::renderWithCamera(obj* cameraNode, int w, int h, EditorApp& app) 
     camera_enable(&cam);
 
     std::vector<light_t> lights;
-    collectLights(app.scene().root(), lights);
+    {
+        EDITOR_PROFILE("Editor.Game.CollectLights");
+        collectLights(app.scene().root(), lights);
+    }
     obj* fogNode = findFogSettings(app.scene().root());
+
+    // Shadow caster pass — see scene_panel for the parallel comment. Runs
+    // BEFORE fx_begin so shadowmap_begin saves the editor FBO and end restores
+    // it; only fires when at least one light has cast_shadows=1.
+    bool any_caster = false;
+    for (const auto& l : lights) {
+        if (l.cast_shadows) { any_caster = true; break; }
+    }
+    if (any_caster) {
+        EDITOR_PROFILE("Editor.Game.ShadowPass");
+        if (!sm_init_) {
+            sm_ = shadowmap();
+            sm_init_ = true;
+        }
+        if (obj* shadowNode = findShadowSettings(app.scene().root())) {
+            editor_shadow_settings_apply(shadowNode, &sm_);
+        }
+        shadowmap_begin(&sm_);
+        for (size_t i = 0; i < lights.size(); ++i) {
+            if (!lights[i].cast_shadows) continue;
+            while (shadowmap_step(&sm_)) {
+                shadowmap_light(&sm_, &lights[i], cam.proj, cam.view);
+                walkShadowPass(app.scene().root(), cam, app);
+            }
+        }
+        shadowmap_end(&sm_);
+    }
 
     // Skybox: resolve from the scene's Skybox node (cached + mtime-poll), render
     // background if its render_background flag is on.
@@ -361,7 +439,10 @@ void GamePanel::renderWithCamera(obj* cameraNode, int w, int h, EditorApp& app) 
         if (render_bg) skybox_render(sky, cam.proj, cam.view);
     }
 
-    walkAndRenderMeshes(app.scene().root(), app, cam, lights, fogNode, sky);
+    {
+        EDITOR_PROFILE("Editor.Game.WalkAndRender");
+        walkAndRenderMeshes(app.scene().root(), app, cam, lights, fogNode, sky);
+    }
 
     // 3D label pass — Text3DRenderer nodes drawn in world-space via ddraw_text.
     drawText3DOverlays(app.scene().root());

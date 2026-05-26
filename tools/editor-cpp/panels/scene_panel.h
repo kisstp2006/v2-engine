@@ -5,8 +5,6 @@
 #include <unordered_set>
 #include <vector>
 
-#include "../core/asset_cache.h"
-
 #include "engine.h"
 #ifdef obj
 #undef obj

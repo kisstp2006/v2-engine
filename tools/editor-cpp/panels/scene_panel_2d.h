@@ -4,8 +4,6 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "../core/asset_cache.h"
-
 #include "engine.h"
 #ifdef obj
 #undef obj
@@ -35,11 +33,9 @@ private:
     int      width_  = 0;
     int      height_ = 0;
 
-    std::unordered_map<std::string, texture_t> textureCache_;
-    std::unordered_map<std::string, tiled_t>   tilemapCache_;
-    AssetMtimes                                textureMtimes_;
-    AssetMtimes                                tilemapMtimes_;
-    FailedPathSet                              failedPaths_;
+    // Asset caches (textureCache_, tilemapCache_, textureMtimes_,
+    // tilemapMtimes_, failedPaths_) live in editor::AssetManager
+    // (Refaktor F1) — accessed via app.assets().
 
     // Gizmo drag → transaction edge-detection (M9b).
     bool        wasUsingGizmo_ = false;

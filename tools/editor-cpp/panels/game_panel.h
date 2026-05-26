@@ -5,8 +5,6 @@
 #include <unordered_set>
 #include <vector>
 
-#include "../core/asset_cache.h"
-
 #include "engine.h"
 #ifdef obj
 #undef obj
@@ -55,22 +53,10 @@ private:
     shadowmap_t sm_{};
     bool        sm_init_ = false;
 
-    std::unordered_map<std::string, model_t>   modelCache_;
-    std::unordered_map<std::string, texture_t> textureCache_;
-    std::unordered_map<std::string, tiled_t>   tilemapCache_;
-    std::unordered_map<std::string, skybox_t>  skyboxCache_;
-    std::unordered_map<std::string, uint64_t>  skyboxMtimes_;
-    AssetMtimes                                modelMtimes_;
-    FailedPathSet                              failedPaths_;
+    // Asset caches live in editor::AssetManager (Refaktor F1) — accessed via
+    // app.assets(). No per-panel cache state remains here.
 
-    // Perf parity with ScenePanel (see scene_panel.h for the full rationale):
-    //
-    // (1) Per-node relPath -> absPath cache. asset_path::toAbsolute calls
-    //     fs::weakly_canonical() which is a ~170 us Windows syscall on every
-    //     mesh on every frame without this. Auto-invalidated on relPath
-    //     mismatch.
-    struct PathCacheEntry { std::string rel; std::string abs; };
-    std::unordered_map<obj*, PathCacheEntry> pathCache_;
+    // Perf parity with ScenePanel (see scene_panel.h for the full rationale).
 
     // (2) Flat node lists, rebuilt only on tree mutation, iterated every
     //     frame instead of the recursive child_count + child_at chain.

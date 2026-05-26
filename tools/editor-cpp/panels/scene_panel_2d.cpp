@@ -6,7 +6,6 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "../core/asset_cache.h"
 #include "../core/asset_path.h"
 
 #include "engine.h"
@@ -111,38 +110,14 @@ void Scene2DPanel::renderSpriteNode(obj* node, EditorApp& app) {
     const char* relPath = editor_sprite_renderer_path(node);
     if (!relPath || !*relPath) return;
 
-    // Phase 4a — abs-resolve.
-    std::string absPath = asset_path::toAbsolute(relPath, app.projectPath());
-    const std::string& path = absPath;
-
-    if (failedPaths_.isFresh(path)) return;
-    failedPaths_.erase(path);
-    if (!is_file(path.c_str())) {
-        failedPaths_.insert(path);
-        app.bus().emit("log", std::string("[Sprite] file not found: ") + relPath);
-        return;
-    }
-
-    uint64_t mt_now = mtimeNs(path);
-    auto mt_it = textureMtimes_.find(path);
-    if (mt_it != textureMtimes_.end() && mt_it->second != mt_now) {
-        textureCache_.erase(path);
-        app.bus().emit("log", std::string("[Sprite] reloaded (mtime): ") + relPath);
-    }
-
-    auto it = textureCache_.find(path);
-    if (it == textureCache_.end()) {
-        texture_t tx = texture(path.c_str(), 0);
-        if (!tx.id) {
-            failedPaths_.insert(path);
-            app.bus().emit("log", std::string("[Sprite] load failed: ") + relPath);
-            return;
-        }
-        auto ins = textureCache_.emplace(path, tx);
-        it = ins.first;
-        textureMtimes_[path] = mt_now;
-        app.bus().emit("log", std::string("[Sprite] loaded: ") + relPath);
-    }
+    // Refaktor F1: shared AssetManager handles rel→abs cache, is_file, mtime
+    // poll, failedPaths and the actual texture() load. Log tag becomes
+    // "[Texture]" instead of the old "[Sprite]" — sprite_renderer is one of
+    // several texture clients (UI textures, etc.) and the manager-level tag
+    // is the consistent one.
+    std::string absPath = app.assets().absPathFor(node, relPath);
+    texture_t* tex = app.assets().loadTexture(absPath, relPath);
+    if (!tex) return;
 
     float pos[3], rot = 0, scale[2] = {1, 1};
     unsigned tint = 0xFFFFFFFFu;
@@ -154,7 +129,7 @@ void Scene2DPanel::renderSpriteNode(obj* node, EditorApp& app) {
     float sheet[3]     = {0, 0, 0};
     float offset[2]    = {0, 0};
     float drawScale[2] = {scale[0], -scale[1]};
-    sprite_sheet(it->second, sheet, pos, rot, offset, drawScale, tint,
+    sprite_sheet(*tex, sheet, pos, rot, offset, drawScale, tint,
                  SPRITE_PROJECTED | SPRITE_CENTERED);
 }
 
@@ -162,46 +137,11 @@ void Scene2DPanel::renderTilemapNode(obj* node, EditorApp& app) {
     const char* relPath = editor_tilemap_ref_path(node);
     if (!relPath || !*relPath) return;
 
-    // Phase 4a — abs-resolve.
-    std::string absPath = asset_path::toAbsolute(relPath, app.projectPath());
-    const std::string& path = absPath;
-
-    if (failedPaths_.isFresh(path)) return;
-    failedPaths_.erase(path);
-    if (!is_file(path.c_str())) {
-        failedPaths_.insert(path);
-        app.bus().emit("log", std::string("[Tilemap] file not found: ") + relPath);
-        return;
-    }
-
-    uint64_t mt_now = mtimeNs(path);
-    auto mt_it = tilemapMtimes_.find(path);
-    if (mt_it != tilemapMtimes_.end() && mt_it->second != mt_now) {
-        tilemapCache_.erase(path);
-        tilemapMtimes_[path] = mt_now;
-        app.bus().emit("log", std::string("[Tilemap] reloaded (mtime): ") + relPath);
-    }
-
-    auto it = tilemapCache_.find(path);
-    if (it == tilemapCache_.end()) {
-        // `tiled()` expects the TMX content, NOT the path — file_read first.
-        char* content = file_read(path.c_str(), 0);
-        if (!content || !*content) {
-            failedPaths_.insert(path);
-            app.bus().emit("log", std::string("[Tilemap] file_read failed: ") + relPath);
-            return;
-        }
-        tiled_t tm = tiled(content);
-        if (!tm.first_gid) {
-            failedPaths_.insert(path);
-            app.bus().emit("log", std::string("[Tilemap] parse failed: ") + relPath);
-            return;
-        }
-        auto ins = tilemapCache_.emplace(path, tm);
-        it = ins.first;
-        tilemapMtimes_[path] = mt_now;
-        app.bus().emit("log", std::string("[Tilemap] loaded: ") + relPath);
-    }
+    // Refaktor F1: AssetManager handles file_read + tiled() parse + mtime
+    // poll + failedPaths. Returns nullptr on any failure path.
+    std::string absPath = app.assets().absPathFor(node, relPath);
+    tiled_t* tm = app.assets().loadTilemap(absPath, relPath);
+    if (!tm) return;
 
     float pos[3];
     editor_tilemap_ref_get_pos(node, pos);
@@ -209,7 +149,7 @@ void Scene2DPanel::renderTilemapNode(obj* node, EditorApp& app) {
     center.x = pos[0];
     center.y = pos[1];
     center.z = pos[2];
-    tiled_render(it->second, center);
+    tiled_render(*tm, center);
 }
 
 void Scene2DPanel::walkAndRender(obj* node, EditorApp& app) {

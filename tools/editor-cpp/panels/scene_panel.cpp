@@ -6,7 +6,6 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "../core/asset_cache.h"
 #include "../core/asset_path.h"
 
 #include "engine.h"

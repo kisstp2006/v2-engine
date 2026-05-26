@@ -4,7 +4,6 @@
 #include <unordered_set>
 #include <vector>
 
-#include "../core/asset_cache.h"
 #include "../core/asset_path.h"
 
 #include "engine.h"
@@ -35,9 +34,7 @@ GamePanel::~GamePanel() {
         shadowmap_destroy(&sm_);
         sm_init_ = false;
     }
-    for (auto& kv : skyboxCache_) skybox_destroy(&kv.second);
-    skyboxCache_.clear();
-    skyboxMtimes_.clear();
+    // Skybox cleanup runs in AssetManager dtor (shared with ScenePanel).
 }
 
 void GamePanel::ensureFbo(int w, int h) {
@@ -255,28 +252,12 @@ skybox_t* GamePanel::resolveSkybox(EditorApp& app) {
     editor_skybox_get(skyNode, &skyPath, &reflPath, &envPath, &render_bg);
     if (!skyPath || !*skyPath) return nullptr;
 
-    std::string absSky = asset_path::toAbsolute(skyPath, app.projectPath());
-    if (!is_file(absSky.c_str())) return nullptr;
-
-    uint64_t mt_now = mtimeNs(absSky);
-    auto mt_it = skyboxMtimes_.find(absSky);
-    auto it    = skyboxCache_.find(absSky);
-    if (it != skyboxCache_.end() && mt_it != skyboxMtimes_.end() && mt_it->second != mt_now) {
-        skybox_destroy(&it->second);
-        skyboxCache_.erase(it);
-        it = skyboxCache_.end();
-    }
-    if (it == skyboxCache_.end()) {
-        std::string absRefl = (reflPath && *reflPath)
-                            ? asset_path::toAbsolute(reflPath, app.projectPath()) : absSky;
-        std::string absEnv  = (envPath && *envPath)
-                            ? asset_path::toAbsolute(envPath, app.projectPath()) : absSky;
-        skybox_t sky = skybox(absSky.c_str(), absRefl.c_str(), absEnv.c_str());
-        auto ins = skyboxCache_.emplace(absSky, sky);
-        it = ins.first;
-        skyboxMtimes_[absSky] = mt_now;
-    }
-    return &it->second;
+    std::string absSky  = asset_path::toAbsolute(skyPath,  app.projectPath());
+    std::string absRefl = (reflPath && *reflPath)
+                        ? asset_path::toAbsolute(reflPath, app.projectPath()) : std::string{};
+    std::string absEnv  = (envPath && *envPath)
+                        ? asset_path::toAbsolute(envPath,  app.projectPath()) : std::string{};
+    return app.assets().loadSkybox(absSky, absRefl, absEnv);
 }
 
 void GamePanel::walkAndRenderMeshes(obj* node, EditorApp& app, camera_t& cam,
@@ -293,13 +274,12 @@ void GamePanel::walkAndRenderMeshes(obj* node, EditorApp& app, camera_t& cam,
 
     // Cross-mesh transparency sort — same fix as ScenePanel. Defer
     // transparent meshes to a second pass, back-to-front by distance.
+    // Refaktor F1: model_t* lives in AssetManager; the entry just carries
+    // the resolved pointer so the second pass doesn't re-lookup.
     struct TransparentEntry {
-        obj*    node;
-        float   dist2;
-        // Cache the resolved iterator / path so the second pass doesn't
-        // re-do pathCache/modelCache lookups + early-out checks.
-        std::unordered_map<std::string, model_t>::iterator it;
-        std::string path;
+        obj*     node;
+        float    dist2;
+        model_t* mp;
     };
     std::vector<TransparentEntry> transparents;
     transparents.reserve(meshNodes_.size() / 4);
@@ -309,51 +289,10 @@ void GamePanel::walkAndRenderMeshes(obj* node, EditorApp& app, camera_t& cam,
         const char* relPath = editor_mesh_renderer_path(m);
         if (!relPath || !*relPath) continue;
 
-        // PathResolve cache (relPath -> absPath). asset_path::toAbsolute()
-        // calls fs::weakly_canonical() (~170 us syscall) when uncached.
-        std::string absPath;
-        {
-            auto pcIt = pathCache_.find(m);
-            if (pcIt != pathCache_.end() && pcIt->second.rel == relPath) {
-                absPath = pcIt->second.abs;
-            } else {
-                absPath = asset_path::toAbsolute(relPath, app.projectPath());
-                pathCache_[m] = PathCacheEntry{relPath, absPath};
-            }
-        }
-        const std::string& path = absPath;
-        if (failedPaths_.isFresh(path)) continue;
-
-        // is_file() skip when the model is already cached. The cache itself
-        // is implicit existence proof (it was successfully loaded earlier).
-        if (modelCache_.find(path) == modelCache_.end()) {
-            failedPaths_.erase(path);
-            if (!is_file(path.c_str())) {
-                failedPaths_.insert(path);
-                continue;
-            }
-        } else {
-            failedPaths_.erase(path);
-        }
-
-        // mtime poll → cache evict on disk change.
-        uint64_t mt_now = mtimeNs(path);
-        auto mt_it = modelMtimes_.find(path);
-        if (mt_it != modelMtimes_.end() && mt_it->second != mt_now) {
-            modelCache_.erase(path);
-        }
-        auto it = modelCache_.find(path);
-        if (it == modelCache_.end()) {
-            model_t mt = model(path.c_str(), 0);
-            if (mt.iqm) {
-                auto ins = modelCache_.emplace(path, mt);
-                it = ins.first;
-                modelMtimes_[path] = mt_now;
-            } else {
-                failedPaths_.insert(path);
-                continue;
-            }
-        }
+        // Refaktor F1: rel→abs resolve + load go through shared AssetManager.
+        std::string absPath = app.assets().absPathFor(m, relPath);
+        model_t* mp = app.assets().loadModel(absPath, relPath);
+        if (!mp) continue;
 
         // Camera-frustum cull — skip the per-frame uniform setup + draw
         // when the mesh's bsphere doesn't intersect the camera frustum.
@@ -361,12 +300,12 @@ void GamePanel::walkAndRenderMeshes(obj* node, EditorApp& app, camera_t& cam,
         // skinned models (rest-pose bsphere unreliable under animation).
         bool can_cull = frustum_cull_ &&
                         editor_mesh_renderer_cull_mode(m) == 0 &&
-                        !(it->second.flags & MODEL_GLTF_SKINNED) &&
-                        it->second.num_joints == 0;
+                        !(mp->flags & MODEL_GLTF_SKINNED) &&
+                        mp->num_joints == 0;
         if (can_cull) {
             mat44 cull_pivot;
             editor_mesh_renderer_compose_pivot(m, cull_pivot);
-            sphere bs = model_bsphere(it->second, cull_pivot);
+            sphere bs = model_bsphere(*mp, cull_pivot);
             if (!frustum_test_sphere(cam_frustum, bs)) {
                 ++culled;
                 continue;
@@ -377,17 +316,17 @@ void GamePanel::walkAndRenderMeshes(obj* node, EditorApp& app, camera_t& cam,
         // blend but doesn't disable depth-write, so an unsorted transparent
         // mesh would occlude any opaque mesh drawn after it (e.g. a wire
         // basket would cut out the floor visible through its holes).
-        if (model_has_transparency(&it->second)) {
+        if (model_has_transparency(mp)) {
             mat44 dist_pivot;
             editor_mesh_renderer_compose_pivot(m, dist_pivot);
             vec3 mesh_pos = vec3(dist_pivot[12], dist_pivot[13], dist_pivot[14]);
             vec3 d = sub3(mesh_pos, cam_pos);
             float d2 = d.x*d.x + d.y*d.y + d.z*d.z;
-            transparents.push_back({m, d2, it, path});
+            transparents.push_back({m, d2, mp});
             continue;
         }
 
-        renderMeshNode_(m, app, cam, lights, fogNode, sky, &it->second);
+        renderMeshNode_(m, app, cam, lights, fogNode, sky, mp);
         ++rendered;
     }
 
@@ -398,8 +337,7 @@ void GamePanel::walkAndRenderMeshes(obj* node, EditorApp& app, camera_t& cam,
                 return a.dist2 > b.dist2;
             });
         for (const auto& t : transparents) {
-            renderMeshNode_(t.node, app, cam, lights, fogNode, sky,
-                            &t.it->second);
+            renderMeshNode_(t.node, app, cam, lights, fogNode, sky, t.mp);
             ++rendered;
         }
     }
@@ -460,20 +398,19 @@ void GamePanel::renderMeshNode_(obj* m, EditorApp& app, camera_t& cam,
 void GamePanel::renderMeshShadowOnly(obj* node, camera_t& cam, EditorApp& app) {
     const char* relPath = editor_mesh_renderer_path(node);
     if (!relPath || !*relPath) return;
-    std::string absPath = asset_path::toAbsolute(relPath, app.projectPath());
-    if (failedPaths_.isFresh(absPath)) return;
-    auto it = modelCache_.find(absPath);
-    if (it == modelCache_.end()) return;   // not yet cached (next frame picks up)
+    std::string absPath = app.assets().absPathFor(node, relPath);
+    model_t* mp = app.assets().modelByAbsPath(absPath);
+    if (!mp) return;   // not yet cached — main pass will load on its frame
     mat44 pivot;
     editor_mesh_renderer_compose_pivot(node, pivot);
     // Match the main-pass skinned-glTF flip so the cast shadow matches the
     // visible silhouette.
-    if (it->second.flags & MODEL_GLTF_SKINNED) {
+    if (mp->flags & MODEL_GLTF_SKINNED) {
         mat44 zrot180; id44(zrot180); zrot180[0] = -1.0f; zrot180[5] = -1.0f;
         mat44 tmp; multiply44x2(tmp, pivot, zrot180);
         memcpy(pivot, tmp, sizeof(mat44));
     }
-    model_render(&it->second, cam.proj, cam.view, &pivot, 1,
+    model_render(mp, cam.proj, cam.view, &pivot, 1,
                  RENDER_PASS_SHADOW);
 }
 
@@ -486,15 +423,13 @@ void GamePanel::walkShadowPass(obj* node, camera_t& cam, EditorApp& app) {
     if (meshNodes_.empty()) return;
 
     // Find a prototype model (first compatible cached mesh) for the batch
-    // to source shader/uniform handles from.
+    // to source shader/uniform handles from. Refaktor F1: iterate the shared
+    // AssetManager model cache instead of pathCache+modelCache lookup.
     model_t* proto = nullptr;
-    for (obj* m : meshNodes_) {
-        auto pcIt = pathCache_.find(m);
-        if (pcIt == pathCache_.end()) continue;
-        auto mcIt = modelCache_.find(pcIt->second.abs);
-        if (mcIt == modelCache_.end()) continue;
-        if (ShadowBatch::isCompatible(&mcIt->second)) {
-            proto = &mcIt->second;
+    for (const auto& kv : app.assets().models()) {
+        model_t* candidate = const_cast<model_t*>(&kv.second);
+        if (ShadowBatch::isCompatible(candidate)) {
+            proto = candidate;
             break;
         }
     }
@@ -512,10 +447,11 @@ void GamePanel::walkShadowPass(obj* node, camera_t& cam, EditorApp& app) {
     const frustum sh_frustum = sm_.shadow_frustum;
     int sh_culled = 0;
     for (obj* m : meshNodes_) {
-        auto pcIt = pathCache_.find(m);
-        if (pcIt == pathCache_.end()) continue;
-        auto mcIt = modelCache_.find(pcIt->second.abs);
-        if (mcIt == modelCache_.end()) continue;
+        const char* relPath = editor_mesh_renderer_path(m);
+        if (!relPath || !*relPath) continue;
+        std::string absPath = app.assets().absPathFor(m, relPath);
+        model_t* mp = app.assets().modelByAbsPath(absPath);
+        if (!mp) continue;
 
         mat44 pivot;
         editor_mesh_renderer_compose_pivot(m, pivot);
@@ -523,29 +459,29 @@ void GamePanel::walkShadowPass(obj* node, camera_t& cam, EditorApp& app) {
         // Frustum cull. Same gates as the main pass.
         bool can_cull_sh = frustum_cull_ &&
                            editor_mesh_renderer_cull_mode(m) == 0 &&
-                           !(mcIt->second.flags & MODEL_GLTF_SKINNED) &&
-                           mcIt->second.num_joints == 0;
+                           !(mp->flags & MODEL_GLTF_SKINNED) &&
+                           mp->num_joints == 0;
         if (can_cull_sh) {
-            sphere bs = model_bsphere(mcIt->second, pivot);
+            sphere bs = model_bsphere(*mp, pivot);
             if (!frustum_test_sphere(sh_frustum, bs)) {
                 ++sh_culled;
                 continue;
             }
         }
 
-        if (ShadowBatch::isCompatible(&mcIt->second)) {
-            shadow_batch_.draw(&mcIt->second, pivot);
+        if (ShadowBatch::isCompatible(mp)) {
+            shadow_batch_.draw(mp, pivot);
         } else {
             // Skinned / incompatible — slow path. End the batch first so the
             // motor's full model_render can do its own shader/state setup.
             shadow_batch_.endFace();
-            if (mcIt->second.flags & MODEL_GLTF_SKINNED) {
+            if (mp->flags & MODEL_GLTF_SKINNED) {
                 mat44 zrot180; id44(zrot180);
                 zrot180[0] = -1.0f; zrot180[5] = -1.0f;
                 mat44 tmp; multiply44x2(tmp, pivot, zrot180);
                 memcpy(pivot, tmp, sizeof(mat44));
             }
-            model_render(&mcIt->second, cam.proj, cam.view, &pivot, 1,
+            model_render(mp, cam.proj, cam.view, &pivot, 1,
                          RENDER_PASS_SHADOW);
             shadow_batch_.beginFace(proto, &sm_, cam.proj, cam.view);
         }
